@@ -18,7 +18,7 @@ const probs=[
  ["Quantum Routes","HARD",800,"Count constrained shortest routes in a weighted graph."]
 ];
 const fmt=(s:number)=>`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
-function Logo(){return <div className="logo"><b>CA</b><span><strong>CODE AUCTION</strong><small>COLLEGIATE TECH EVENT</small></span></div>}
+function Logo(){return <div className="logo"><img src="/techx-logo.png" alt="TECHX Madras 26"/><span><strong>CODE AUCTION</strong><small>TECHX MADRAS 26</small></span></div>}
 function Pill({children,kind="cyan"}:{children:any,kind?:string}){return <em className={`pill ${kind}`}>{children}</em>}
 function Top({name,time,label}:{name:string,time:number,label:string}){return <header className="top"><Logo/><Pill>{label}</Pill><div className="identity"><span>{name.slice(0,2).toUpperCase()}</span><b>{name}<small>CA-1088</small></b></div><div className="timer"><Clock3/><span><small>SERVER TIME</small><b>{fmt(time)}</b></span></div></header>}
 
