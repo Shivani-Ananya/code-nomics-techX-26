@@ -108,6 +108,24 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 
 Replace the filename with the pending migration and `DB` with your D1 binding name if different. Use `.wrangler/state`, not `.wrangler/state/v3`; Wrangler adds the versioned directories. Do not replay migrations already applied locally. This updates only the preview database; publishing applies production migrations separately.
 
+## Code Auction production configuration
+
+The event now uses D1 as the authoritative store. Browser values are display-only: login, quiz scoring, coin awards and purchases, language locking, hidden-test judging, problem unlocks, leaderboard ordering, host controls, timers, account moderation, and result publishing are validated by the /api/event server route.
+
+Apply drizzle/0000_code_auction.sql to a new local database, then start the app. The first API request safely seeds the development event with:
+
+- Host: HOST-01 / CODE2026
+- Participants: CA-1001 through CA-1010 / CODE2026
+- 40 quiz questions, five coding problems, and five hidden cases per problem
+
+Before deployment, configure the runtime values shown in .env.example through Sites:
+
+- SESSION_SECRET: at least 32 random bytes; signs 12-hour HttpOnly, SameSite=Strict sessions.
+- JUDGE0_URL: a private, isolated Judge0-compatible HTTP endpoint.
+- JUDGE0_API_KEY: the Judge0 authentication token.
+
+Judge0 must enforce process isolation, no network, a two-second CPU limit, and a 128 MB memory limit. Submissions are disabled when no judge endpoint is configured; the application never evaluates participant code in its own worker and never returns hidden test data to browsers.
+
 ## Diagnostic Commands
 
 - `npm run install:ci`: perform the one locked dependency install
