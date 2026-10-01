@@ -52,7 +52,7 @@ export async function readSession(request: Request): Promise<Session | null> {
   const token = cookie.match(/(?:^|;\s*)ca_session=([^;]+)/)?.[1];
   if (!token) return null;
   const [payload, supplied] = token.split(".");
-  if (!payload || !supplied || (await signature(payload)) !== supplied) return null;
+  if (!payload || !supplied || !safeEqual(await signature(payload), supplied)) return null;
   try {
     const session = JSON.parse(fromBase64url(payload)) as Session;
     return session.exp > Date.now() ? session : null;

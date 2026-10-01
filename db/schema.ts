@@ -116,3 +116,22 @@ export const coinTransactions = sqliteTable("coin_transactions", {
   balanceAfter: integer("balance_after").notNull(),
   createdAt: integer("created_at").notNull(),
 }, (t) => [index("idx_coin_transactions_participant_created").on(t.participantId, t.createdAt)]);
+
+export const loginRateLimits = sqliteTable("login_rate_limits", {
+  clientKey: text("client_key").primaryKey(),
+  failedCount: integer("failed_count").notNull().default(0),
+  firstFailedAt: integer("first_failed_at").notNull(),
+  blockedUntil: integer("blocked_until"),
+  updatedAt: integer("updated_at").notNull(),
+}, (t) => [index("idx_login_rate_limits_updated").on(t.updatedAt)]);
+
+export const scoreAdjustments = sqliteTable("score_adjustments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  participantId: text("participant_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  hostId: text("host_id").notNull().references(() => users.id),
+  delta: integer("delta").notNull(),
+  reason: text("reason").notNull(),
+  scoreBefore: integer("score_before").notNull(),
+  scoreAfter: integer("score_after").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (t) => [index("idx_score_adjustments_participant_created").on(t.participantId, t.createdAt)]);

@@ -112,15 +112,14 @@ Replace the filename with the pending migration and `DB` with your D1 binding na
 
 The event now uses D1 as the authoritative store. Browser values are display-only: login, quiz scoring, coin awards and purchases, language locking, hidden-test judging, problem unlocks, leaderboard ordering, host controls, timers, account moderation, and result publishing are validated by the /api/event server route.
 
-Apply drizzle/0000_code_auction.sql to a new local database, then start the app. The first API request safely seeds the development event with:
-
-- Host: HOST-01 / CODE2026
-- Participants: CA-1001 through CA-1010 / CODE2026
+Apply the migrations in `drizzle/` to a new local database, configure the event passwords, then start the app. The first API request safely seeds the event with host ID `HOST-01` and participant IDs `CA-1001` through `CA-1010`. Passwords are read from the environment and are never embedded in source.
 - 40 quiz questions, five coding problems, and five hidden cases per problem
 
 Before deployment, configure the runtime values shown in .env.example through Sites:
 
 - SESSION_SECRET: at least 32 random bytes; signs 12-hour HttpOnly, SameSite=Strict sessions.
+- EVENT_HOST_PASSWORD: a unique password of at least 12 characters for the host account.
+- EVENT_PARTICIPANT_PASSWORD: a unique password of at least 12 characters for seeded participant accounts.
 - JUDGE0_URL: a private, isolated Judge0-compatible HTTP endpoint.
 - JUDGE0_API_KEY: the Judge0 authentication token.
 

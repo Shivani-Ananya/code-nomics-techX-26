@@ -7,8 +7,36 @@ const json = (data: unknown, status = 200, headers?: HeadersInit) => {
   const safeHeaders = new Headers(headers);
   safeHeaders.set("Cache-Control", "no-store, max-age=0");
   safeHeaders.set("X-Content-Type-Options", "nosniff");
+  safeHeaders.set("Referrer-Policy", "no-referrer");
+  safeHeaders.set("X-Frame-Options", "DENY");
   return Response.json(data, { status, headers: safeHeaders });
 };
+
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_BLOCK_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 5;
+
+async function loginClientKey(request: Request, id: string) {
+  const address = request.headers.get("cf-connecting-ip") || request.headers.get("x-real-ip") || "unknown";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(id + "|" + address));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function loginBlocked(clientKey: string) {
+  const row = await db().prepare("SELECT blocked_until AS blockedUntil FROM login_rate_limits WHERE client_key=?").bind(clientKey).first<{ blockedUntil: number | null }>();
+  return Number(row?.blockedUntil || 0) > Date.now();
+}
+
+async function recordLoginFailure(clientKey: string) {
+  const database = db();
+  const now = Date.now();
+  const row = await database.prepare("SELECT failed_count AS failedCount, first_failed_at AS firstFailedAt FROM login_rate_limits WHERE client_key=?").bind(clientKey).first<{ failedCount: number; firstFailedAt: number }>();
+  const withinWindow = row && now - Number(row.firstFailedAt) <= LOGIN_WINDOW_MS;
+  const failedCount = withinWindow ? Number(row.failedCount) + 1 : 1;
+  const firstFailedAt = withinWindow ? Number(row.firstFailedAt) : now;
+  const blockedUntil = failedCount >= LOGIN_MAX_FAILURES ? now + LOGIN_BLOCK_MS : null;
+  await database.prepare("INSERT INTO login_rate_limits (client_key, failed_count, first_failed_at, blocked_until, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(client_key) DO UPDATE SET failed_count=excluded.failed_count, first_failed_at=excluded.first_failed_at, blocked_until=excluded.blocked_until, updated_at=excluded.updated_at").bind(clientKey, failedCount, firstFailedAt, blockedUntil, now).run();
+}
 
 async function snapshot(request: Request) {
   const session = await readSession(request);
@@ -20,7 +48,7 @@ async function snapshot(request: Request) {
     "SELECT u.id, u.name, u.college, p.coins, p.quiz_correct AS quizCorrect, p.coding_score AS codingScore, p.language, p.current_question AS currentQuestion, p.solved, p.helps_used AS helpsUsed, p.completion_time AS completionTime, p.status, p.last_seen AS lastSeen, u.locked, u.disqualified FROM participants p JOIN users u ON u.id=p.user_id ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC, COALESCE(p.completion_time, 9999999999999) ASC",
   ).all();
   if (session.role === "host") {
-    return json({ session, rounds: roundMap, leaderboard: leaderboard.results, serverTime: Date.now() });
+    return json({ session, rounds: roundMap, leaderboard: leaderboard.results, serverTime: Date.now(), judgeConfigured: Boolean((env as unknown as Record<string, string>).JUDGE0_URL) });
   }
   await database.prepare("UPDATE participants SET last_seen=?, status=CASE WHEN status='waiting' THEN status ELSE 'online' END WHERE user_id=?").bind(Date.now(), session.id).run();
   const participant = await database.prepare(
@@ -52,10 +80,20 @@ async function login(request: Request, body: Body) {
   await ensureSeeded();
   const id = String(body.id || "").trim().toUpperCase();
   const role = body.role === "host" ? "host" : "participant";
+  if (!/^(HOST-\d{2}|CA-\d{4})$/.test(id) || String(body.password || "").length > 256) return json({ error: "Invalid credentials or account unavailable" }, 401);
+  const clientKey = await loginClientKey(request, id);
+  if (await loginBlocked(clientKey)) return json({ error: "Too many failed attempts. Try again in 15 minutes." }, 429, { "Retry-After": "900" });
   const user = await db().prepare("SELECT * FROM users WHERE id=? AND role=?").bind(id, role).first<Record<string, any>>();
-  if (!user || user.locked || user.disqualified) return json({ error: "Invalid credentials or account unavailable" }, 401);
+  if (!user || user.locked || user.disqualified) {
+    await recordLoginFailure(clientKey);
+    return json({ error: "Invalid credentials or account unavailable" }, 401);
+  }
   const supplied = await hashPassword(String(body.password || ""), user.password_salt);
-  if (!safeEqual(supplied, user.password_hash)) return json({ error: "Invalid credentials or account unavailable" }, 401);
+  if (!safeEqual(supplied, user.password_hash)) {
+    await recordLoginFailure(clientKey);
+    return json({ error: "Invalid credentials or account unavailable" }, 401);
+  }
+  await db().prepare("DELETE FROM login_rate_limits WHERE client_key=?").bind(clientKey).run();
   const token = await createSession(user.id, user.role);
   const authHeaders = new Headers(request.headers);
   authHeaders.set("cookie", "ca_session=" + token);
@@ -68,6 +106,8 @@ async function login(request: Request, body: Body) {
 async function requireRole(request: Request, role?: "host" | "participant") {
   const session = await readSession(request);
   if (!session || (role && session.role !== role)) return null;
+  const user = await db().prepare("SELECT role, locked, disqualified FROM users WHERE id=?").bind(session.id).first<Record<string, any>>();
+  if (!user || user.role !== session.role || user.locked || user.disqualified) return null;
   return session;
 }
 
@@ -105,6 +145,28 @@ async function participantControl(request: Request, body: Body) {
     db().prepare("UPDATE participants SET status='disqualified' WHERE user_id=?").bind(target),
   ]);
   else return json({ error: "Invalid participant control" }, 400);
+  return snapshot(request);
+}
+
+async function manualScore(request: Request, body: Body) {
+  const session = await requireRole(request, "host");
+  if (!session) return json({ error: "Host authorization required" }, 403);
+  const target = String(body.participantId || "");
+  const delta = Number(body.delta);
+  const reason = String(body.reason || "").trim();
+  if (!/^CA-\d{4}$/.test(target) || !Number.isInteger(delta) || delta === 0 || Math.abs(delta) > 5000) return json({ error: "Score adjustment must be a whole number between -5000 and 5000" }, 400);
+  if (reason.length < 5 || reason.length > 200) return json({ error: "Provide a reason between 5 and 200 characters" }, 400);
+  const database = db();
+  const participant = await database.prepare("SELECT coding_score AS codingScore FROM participants WHERE user_id=?").bind(target).first<{ codingScore: number }>();
+  if (!participant) return json({ error: "Participant not found" }, 404);
+  const before = Number(participant.codingScore);
+  const after = Math.max(0, before + delta);
+  const appliedDelta = after - before;
+  const now = Date.now();
+  await database.batch([
+    database.prepare("UPDATE participants SET coding_score=? WHERE user_id=?").bind(after, target),
+    database.prepare("INSERT INTO score_adjustments (participant_id, host_id, delta, reason, score_before, score_after, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(target, session.id, appliedDelta, reason, before, after, now),
+  ]);
   return snapshot(request);
 }
 
@@ -175,11 +237,22 @@ async function purchaseHelp(request: Request, body: Body) {
 async function judge(source: string, language: string, input: string, expected: string) {
   const config = env as unknown as Record<string, string>;
   if (!config.JUDGE0_URL) throw new Error("Judge0 is not configured");
-  const response = await fetch(config.JUDGE0_URL.replace(/\/$/, "") + "/submissions?base64_encoded=false&wait=true", {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(config.JUDGE0_API_KEY ? { "X-Auth-Token": config.JUDGE0_API_KEY } : {}) },
-    body: JSON.stringify({ source_code: source, language_id: language === "Python" ? 71 : 62, stdin: input, expected_output: expected, cpu_time_limit: 2, memory_limit: 131072, enable_network: false }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  let response: Response;
+  try {
+    response = await fetch(config.JUDGE0_URL.replace(/\/$/, "") + "/submissions?base64_encoded=false&wait=true", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(config.JUDGE0_API_KEY ? { "X-Auth-Token": config.JUDGE0_API_KEY } : {}) },
+      body: JSON.stringify({ source_code: source, language_id: language === "Python" ? 71 : 62, stdin: input, expected_output: expected, cpu_time_limit: 2, memory_limit: 131072, enable_network: false }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error("Judge service timed out. Ask the host to retry or use the manual score override.");
+    throw new Error("Judge service is unavailable. Ask the host to retry or use the manual score override.");
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) throw new Error("Judge service rejected the submission");
   return await response.json() as Record<string, any>;
 }
@@ -236,6 +309,7 @@ export async function POST(request: Request) {
     if (action === "logout") return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie(request) });
     if (action === "host-control") return hostAction(request, body);
     if (action === "participant-control") return participantControl(request, body);
+    if (action === "manual-score") return manualScore(request, body);
     if (action === "answer") return answerQuestion(request, body);
     if (action === "submit-quiz") return submitQuiz(request);
     if (action === "select-language") return selectLanguage(request, body);

@@ -36,9 +36,15 @@ export async function ensureSeeded() {
     ["HOST-01", "host", "Host Admin", "TECHX Madras 26"],
     ...Array.from({ length: 10 }, (_, i) => ["CA-" + String(1001 + i), "participant", ["Arjun Mehta","Priya Nair","Rahul Sen","Meera Iyer","Kabir Shah","Ananya Rao","Dev Patel","Sara Khan","Vikram Das","Nila Kumar"][i], ["NIT Trichy","PSG Tech","VIT Chennai","CEG Anna University","SRM IST","MIT Chennai","IIT Madras","SSN College","SASTRA","REC Chennai"][i]]),
   ];
+  const config = env as unknown as Record<string, string>;
+  const hostPassword = config.EVENT_HOST_PASSWORD;
+  const participantPassword = config.EVENT_PARTICIPANT_PASSWORD;
+  if (!hostPassword || hostPassword.length < 12 || !participantPassword || participantPassword.length < 12) {
+    throw new Error("EVENT_HOST_PASSWORD and EVENT_PARTICIPANT_PASSWORD must each contain at least 12 characters");
+  }
   for (const [id, role, name, college] of identities) {
     const salt = randomSalt();
-    const hash = await hashPassword("CODE2026", salt);
+    const hash = await hashPassword(role === "host" ? hostPassword : participantPassword, salt);
     userStatements.push(database.prepare("INSERT INTO users (id, role, name, college, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id, role, name, college, hash, salt, now));
     if (role === "participant") userStatements.push(database.prepare("INSERT INTO participants (user_id, last_seen) VALUES (?, ?)").bind(id, now));
   }

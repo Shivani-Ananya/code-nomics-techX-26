@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, Braces, Check, Clock3, Code2, Coins, Lock, Pause, Play, ShieldCheck, ShoppingCart, Trophy, Users } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Activity, Braces, Check, Clock3, Code2, Coins, Lock, Pause, Play, ShieldCheck, ShoppingCart, Trophy, Users, LogOut } from "lucide-react";
 
 type EventState = {
   session: { id: string; role: "host" | "participant" };
@@ -13,6 +13,7 @@ type EventState = {
   problems?: any[];
   purchases?: any[];
   judgeConfigured?: boolean;
+  serverTime: number;
 };
 
 const formatTime = (seconds: number) => String(Math.floor(Math.max(0, seconds) / 60)).padStart(2, "0") + ":" + String(Math.max(0, seconds) % 60).padStart(2, "0");
@@ -23,6 +24,19 @@ const request = async (body?: Record<string, unknown>) => {
   return data;
 };
 
+const handleLogout = async () => {
+  try {
+    await request({ action: "logout" });
+    window.location.reload();
+  } catch (e) {
+    console.error(e);
+  }
+};
+
+function LogoutButton({ compact = false }: { compact?: boolean }) {
+  return <button className={compact ? "logout-button compact" : "logout-button"} onClick={handleLogout} title="Log out"><LogOut size={compact ? 16 : 18}/><span>LOG OUT</span></button>;
+}
+
 function Logo() {
   return <div className="logo"><img src="/techx-logo.png" alt="TECHX Madras 26"/><span><strong>CODE AUCTION</strong><small>TECHX MADRAS 26</small></span></div>;
 }
@@ -32,21 +46,28 @@ function Pill({ children, kind = "cyan" }: { children: React.ReactNode; kind?: s
 function Top({ state, label }: { state: EventState; label: string }) {
   const user = state.participant;
   const time = label.includes("QUIZ") ? state.rounds.round1?.remainingSeconds : state.rounds.round2?.remainingSeconds;
-  return <header className="top"><Logo/><Pill>{label}</Pill><div className="identity"><span>{(user?.name || "Host").slice(0, 2).toUpperCase()}</span><b>{user?.name || "Host Admin"}<small>{state.session.id}</small></b></div><div className="timer"><Clock3/><span><small>SERVER TIME</small><b>{formatTime(time || 0)}</b></span></div></header>;
+  return <header className="top"><Logo/><Pill>{label}</Pill><div className="identity"><span>{(user?.name || "Host").slice(0, 2).toUpperCase()}</span><b>{user?.name || "Host Admin"}<small>{state.session.id}</small></b></div><div className="timer"><Clock3/><span><small>SERVER TIME</small><b>{formatTime(time || 0)}</b></span><LogoutButton compact/></div></header>;
 }
 
 export default function Home() {
   const [state, setState] = useState<EventState | null>(null);
   const [role, setRole] = useState<"host" | "participant">("participant");
-  const [id, setId] = useState("CA-1001");
-  const [password, setPassword] = useState("CODE2026");
+  const [id, setId] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     try { setState(await request()); } catch (e) { if ((e as Error).message !== "Authentication required") setError((e as Error).message); }
   }, []);
-  useEffect(() => { refresh(); const timer = setInterval(refresh, 2000); return () => clearInterval(timer); }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!state) return;
+    const participantIsActive = state.session.role === "participant" && (state.rounds.round1?.status === "active" || state.rounds.round2?.status === "active");
+    const delay = state.session.role === "host" || participantIsActive ? 2000 : 5000;
+    const timer = setInterval(refresh, delay);
+    return () => clearInterval(timer);
+  }, [refresh, state?.session.role, state?.rounds.round1?.status, state?.rounds.round2?.status]);
 
   const login = async () => {
     setLoading(true); setError("");
@@ -55,7 +76,7 @@ export default function Home() {
     finally { setLoading(false); }
   };
 
-  if (!state) return <main className="login"><header><Logo/><span className="online"><i/> CENTRAL EVENT SERVER</span></header><section><div className="intro"><Pill>PRODUCTION CONTROL</Pill><h1>THINK FAST.<br/><span>CODE FASTER.</span></h1><p>Scores, coins, timers, purchases, submissions and ranks are verified and stored by the event server.</p><div className="steps"><b>01 <small>QUIZ<br/>EARN COINS</small></b><b>02 <small>CODE<br/>SOLVE & BID</small></b><b>03 <small>WIN<br/>CLIMB THE BOARD</small></b></div></div><div className="loginbox"><div className="tabs"><button className={role === "participant" ? "active" : ""} onClick={() => { setRole("participant"); setId("CA-1001"); }}><Users/> Participant</button><button className={role === "host" ? "active" : ""} onClick={() => { setRole("host"); setId("HOST-01"); }}><ShieldCheck/> Host</button></div><h2>{role === "host" ? "HOST CONTROL ACCESS" : "JOIN THE EVENT"}</h2><p>Use the credentials issued by the event team.</p><label>{role === "host" ? "ADMIN ID" : "PARTICIPANT ID"}<input value={id} onChange={(e) => setId(e.target.value)}/></label><label>EVENT PASSWORD<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && login()}/></label>{error && <p className="api-error">{error}</p>}<button className="primary" disabled={loading} onClick={login}>{loading ? "AUTHENTICATING…" : role === "host" ? "OPEN CONTROL ROOM" : "JOIN EVENT"}</button><small className="secure"><Lock/> Signed HttpOnly session · Server-authorized actions</small></div></section></main>;
+  if (!state) return <main className="login"><header><Logo/><span className="online"><i/> CENTRAL EVENT SERVER</span></header><section><div className="intro"><Pill>PRODUCTION CONTROL</Pill><h1>THINK FAST.<br/><span>CODE FASTER.</span></h1><p>Scores, coins, timers, purchases, submissions and ranks are verified and stored by the event server.</p><div className="steps"><b>01 <small>QUIZ<br/>EARN COINS</small></b><b>02 <small>CODE<br/>SOLVE & BID</small></b><b>03 <small>WIN<br/>CLIMB THE BOARD</small></b></div></div><div className="loginbox"><div className="tabs"><button className={role === "participant" ? "active" : ""} onClick={() => { setRole("participant"); setId(""); setPassword(""); setError(""); }}><Users/> Participant</button><button className={role === "host" ? "active" : ""} onClick={() => { setRole("host"); setId(""); setPassword(""); setError(""); }}><ShieldCheck/> Host</button></div><h2>{role === "host" ? "HOST CONTROL ACCESS" : "JOIN THE EVENT"}</h2><p>Use the credentials issued by the event team.</p><label>{role === "host" ? "ADMIN ID" : "PARTICIPANT ID"}<input autoComplete="username" placeholder={role === "host" ? "Enter host ID" : "Enter participant ID"} value={id} onChange={(e) => setId(e.target.value)}/></label><label>EVENT PASSWORD<input autoComplete="current-password" placeholder="Enter event password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && login()}/></label>{error && <p className="api-error" role="alert">{error}</p>}<button className="primary" disabled={loading || !id.trim() || !password} onClick={login}>{loading ? "AUTHENTICATING…" : role === "host" ? "OPEN CONTROL ROOM" : "JOIN EVENT"}</button><small className="secure"><Lock/> Signed HttpOnly session · Server-authorized actions</small></div></section></main>;
 
   if (state.session.role === "host") return <Host state={state} setState={setState} setError={setError}/>;
   const p = state.participant;
@@ -70,13 +91,13 @@ export default function Home() {
 }
 
 function StatusScreen({ title, text }: { title: string; text: string }) {
-  return <div className="waiting"><Logo/><div className="seal"><Lock/></div><h1>{title}</h1><p>{text}</p></div>;
+  return <div className="waiting"><Logo/><div className="seal"><Lock/></div><h1>{title}</h1><p>{text}</p><LogoutButton/></div>;
 }
 
 function Waiting({ state }: { state: EventState }) {
   const p = state.participant;
   const waitingFor = !p.quizSubmittedAt ? "WAITING FOR HOST TO START ROUND 1" : "WAITING FOR HOST TO START ROUND 2";
-  return <div className="waiting"><Logo/><div className="seal"><Check/></div><Pill>{p.quizSubmittedAt ? "ROUND 1 COMPLETE" : "CHECKED IN"}</Pill><h1>{p.quizSubmittedAt ? "Quiz securely submitted." : "Welcome, " + p.name + "."}</h1><p>Your progress is stored centrally. You will enter the round automatically when the host starts it.</p>{p.quizSubmittedAt && <div className="results"><div><small>CORRECT</small><b>{p.quizCorrect}/40</b></div><div><small>COINS EARNED</small><b className="gold">{p.coins}</b></div><div><small>CURRENT RANK</small><b>#{state.leaderboard.findIndex((x) => x.id === p.id) + 1}</b></div></div>}<div className="waitline"><i/> {waitingFor}</div></div>;
+  return <div className="waiting"><Logo/><div className="seal"><Check/></div><Pill>{p.quizSubmittedAt ? "ROUND 1 COMPLETE" : "CHECKED IN"}</Pill><h1>{p.quizSubmittedAt ? "Quiz securely submitted." : "Welcome, " + p.name + "."}</h1><p>Your progress is stored centrally. You will enter the round automatically when the host starts it.</p>{p.quizSubmittedAt && <div className="results"><div><small>CORRECT</small><b>{p.quizCorrect}/40</b></div><div><small>COINS EARNED</small><b className="gold">{p.coins}</b></div><div><small>CURRENT RANK</small><b>#{state.leaderboard.findIndex((x) => x.id === p.id) + 1}</b></div></div>}<div className="waitline"><i/> {waitingFor}</div><LogoutButton/></div>;
 }
 
 function Quiz({ state, setState, setError }: { state: EventState; setState: (s: EventState) => void; setError: (s: string) => void }) {
@@ -106,7 +127,7 @@ function Language({ state, setState, setError }: { state: EventState; setState: 
     if (!confirm("Lock " + language + " for Round 2? This cannot be changed.")) return;
     try { setState(await request({ action: "select-language", language })); } catch (e) { setError((e as Error).message); }
   };
-  return <div className="language"><Logo/><Pill>ROUND 2 IS LIVE</Pill><h1>Choose your language</h1><p>This server-enforced choice is locked for the entire coding round.</p><div><button className={language === "Python" ? "active" : ""} onClick={() => setLanguage("Python")}><b>PY</b>Python 3.12</button><button className={language === "Java" ? "active" : ""} onClick={() => setLanguage("Java")}><b>JV</b>Java 21</button></div><button className="primary" onClick={confirmLanguage}>CONFIRM {language.toUpperCase()}</button></div>;
+  return <div className="language"><Logo/><Pill>ROUND 2 IS LIVE</Pill><h1>Choose your language</h1><p>This server-enforced choice is locked for the entire coding round.</p><div><button className={language === "Python" ? "active" : ""} onClick={() => setLanguage("Python")}><b>PY</b>Python 3.12</button><button className={language === "Java" ? "active" : ""} onClick={() => setLanguage("Java")}><b>JV</b>Java 21</button></div><button className="primary" onClick={confirmLanguage}>CONFIRM {language.toUpperCase()}</button><LogoutButton/></div>;
 }
 
 function Coding({ state, setState, setError }: { state: EventState; setState: (s: EventState) => void; setError: (s: string) => void }) {
@@ -133,6 +154,8 @@ function Coding({ state, setState, setError }: { state: EventState; setState: (s
 
 function Host({ state, setState, setError }: { state: EventState; setState: (s: EventState) => void; setError: (s: string) => void }) {
   const [selected, setSelected] = useState(0);
+  const [scoreDelta, setScoreDelta] = useState("");
+  const [scoreReason, setScoreReason] = useState("");
   const person = state.leaderboard[selected] || {};
   const control = async (round: string, action: string, seconds?: number) => {
     if ((action === "end" || action === "publish") && !confirm("Confirm this host action? It affects all participants.")) return;
@@ -143,7 +166,19 @@ function Host({ state, setState, setError }: { state: EventState; setState: (s: 
     try { setState(await request({ action: "participant-control", participantId: person.id, control: action })); }
     catch (e) { setError((e as Error).message); }
   };
+  const adjustScore = async () => {
+    const delta = Number(scoreDelta);
+    if (!Number.isInteger(delta) || delta === 0 || Math.abs(delta) > 5000) return setError("Enter a whole-number score adjustment between -5000 and 5000.");
+    if (scoreReason.trim().length < 5) return setError("Add a short reason for the audit log.");
+    if (!confirm(`Apply ${delta > 0 ? "+" : ""}${delta} points to ${person.name}?`)) return;
+    try {
+      setState(await request({ action: "manual-score", participantId: person.id, delta, reason: scoreReason.trim() }));
+      setScoreDelta("");
+      setScoreReason("");
+      setError("");
+    } catch (e) { setError((e as Error).message); }
+  };
   const status = state.rounds.round2?.status;
-  const online = state.leaderboard.filter((x) => Date.now() - x.lastSeen < 15000).length;
-  return <div className="host"><aside className="side"><Logo/><nav><button><Activity/> Overview</button><button className="active"><Users/> Participants</button><button><Braces/> Questions</button><button><Coins/> Coin ledger</button><button><Trophy/> Leaderboard</button></nav><div className="admin"><b>HS</b><span>Host Admin<small>Server authority</small></span></div></aside><main><header className="hosthead"><div><Pill>HOST CONTROL</Pill><h1>Central Event Operations</h1></div><div><small>ROUND 2 SERVER TIMER</small><b>{formatTime(state.rounds.round2?.remainingSeconds || 0)}</b><Pill kind="green">{status?.toUpperCase()}</Pill></div></header>{error && <p className="api-error">{error}</p>}<div className="controls"><button className="start" onClick={() => control("round1", "start")}><Play/> START ROUND 1</button><button className="start" onClick={() => control("round2", "start")}><Play/> START ROUND 2</button><button onClick={() => control("round2", status === "paused" ? "resume" : "pause")}><Pause/> {status === "paused" ? "RESUME" : "PAUSE"}</button><button onClick={() => control("round2", "add", 300)}>+5 MIN</button><button className="danger" onClick={() => control("round2", "end")}>END ROUND</button><button onClick={() => control("round2", "publish")}>PUBLISH RESULTS</button></div><div className="stats"><article><small>TOTAL</small><b>{state.leaderboard.length}</b><span>participants</span></article><article><small>ONLINE</small><b>{online}</b><span>last 15 seconds</span></article><article><small>PROBLEMS SOLVED</small><b>{state.leaderboard.reduce((n, x) => n + x.solved, 0)}</b><span>server total</span></article><article><small>COINS IN PLAY</small><b>{state.leaderboard.reduce((n, x) => n + x.coins, 0)}</b><span>verified balance</span></article></div><div className="hostgrid"><section className="tablebox"><header><h2>Live participants</h2><span><i/> SERVER SYNCHRONIZED</span></header><table><thead><tr><th>RANK</th><th>PARTICIPANT</th><th>LANG.</th><th>PROGRESS</th><th>SCORE</th><th>COINS</th><th>HELP</th><th>STATUS</th></tr></thead><tbody>{state.leaderboard.map((x, index) => <tr onClick={() => setSelected(index)} className={selected === index ? "selected" : ""} key={x.id}><td>#{index + 1}</td><td><b>{x.name}</b><small>{x.id}</small></td><td><code>{x.language || "—"}</code></td><td><progress value={x.solved} max="5"/> {x.solved}/5</td><td>{x.codingScore}</td><td className="gold">{x.coins}</td><td>{x.helpsUsed}/3</td><td><Pill kind={Date.now() - x.lastSeen < 15000 ? "green" : "muted"}>{x.status}</Pill></td></tr>)}</tbody></table></section><aside className="detail"><header><b>{String(person.name || "—").slice(0, 2)}</b><span><h3>{person.name}</h3><small>{person.id} · {person.college}</small></span></header><div className="meta"><span>LANGUAGE<b>{person.language || "Not selected"}</b></span><span>SOLVED<b>{person.solved}/5</b></span><span>COINS<b className="gold">{person.coins}</b></span><span>HELP USED<b>{person.helpsUsed}/3</b></span></div><h4>SERVER RECORD</h4><div className="prow"><b>QUIZ</b><span>Correct answers<small>{person.quizCorrect}/40</small></span><Check/></div><div className="prow"><b>CODE</b><span>Coding points<small>{person.codingScore}</small></span><Check/></div><div className="prow"><b>STATE</b><span>Current question<small>Q{person.currentQuestion}</small></span><Lock/></div><footer><button onClick={() => moderate(person.locked ? "unlock" : "lock")}>{person.locked ? "UNLOCK" : "LOCK"} PARTICIPANT</button><button className="danger" onClick={() => moderate("disqualify")}>DISQUALIFY</button></footer></aside></div></main></div>;
+  const online = state.leaderboard.filter((x) => state.serverTime - x.lastSeen < 15000).length;
+  return <div className="host"><aside className="side"><Logo/><nav><button><Activity/> Overview</button><button className="active"><Users/> Participants</button><button><Braces/> Questions</button><button><Coins/> Coin ledger</button><button><Trophy/> Leaderboard</button></nav><div className="admin"><b>HS</b><span>Host Admin<small>Server authority</small></span><LogoutButton compact/></div></aside><main><header className="hosthead"><div><Pill>HOST CONTROL</Pill><h1>Central Event Operations</h1></div><div><small>ROUND 2 SERVER TIMER</small><b>{formatTime(state.rounds.round2?.remainingSeconds || 0)}</b><Pill kind="green">{status?.toUpperCase()}</Pill><Pill kind={state.judgeConfigured ? "green" : "hard"}>{state.judgeConfigured ? "JUDGE ONLINE" : "MANUAL JUDGE"}</Pill></div></header>{error && <p className="api-error">{error}</p>}<div className="controls"><button className="start" onClick={() => control("round1", "start")}><Play/> START ROUND 1</button><button className="start" onClick={() => control("round2", "start")}><Play/> START ROUND 2</button><button onClick={() => control("round2", status === "paused" ? "resume" : "pause")}><Pause/> {status === "paused" ? "RESUME" : "PAUSE"}</button><button onClick={() => control("round2", "add", 300)}>+5 MIN</button><button className="danger" onClick={() => control("round2", "end")}>END ROUND</button><button onClick={() => control("round2", "publish")}>PUBLISH RESULTS</button></div><div className="stats"><article><small>TOTAL</small><b>{state.leaderboard.length}</b><span>participants</span></article><article><small>ONLINE</small><b>{online}</b><span>last 15 seconds</span></article><article><small>PROBLEMS SOLVED</small><b>{state.leaderboard.reduce((n, x) => n + x.solved, 0)}</b><span>server total</span></article><article><small>COINS IN PLAY</small><b>{state.leaderboard.reduce((n, x) => n + x.coins, 0)}</b><span>verified balance</span></article></div><div className="hostgrid"><section className="tablebox"><header><h2>Live participants</h2><span><i/> SERVER SYNCHRONIZED</span></header><table><thead><tr><th>RANK</th><th>PARTICIPANT</th><th>LANG.</th><th>PROGRESS</th><th>SCORE</th><th>COINS</th><th>HELP</th><th>STATUS</th></tr></thead><tbody>{state.leaderboard.map((x, index) => <tr onClick={() => setSelected(index)} className={selected === index ? "selected" : ""} key={x.id}><td>#{index + 1}</td><td><b>{x.name}</b><small>{x.id}</small></td><td><code>{x.language || "—"}</code></td><td><progress value={x.solved} max="5"/> {x.solved}/5</td><td>{x.codingScore}</td><td className="gold">{x.coins}</td><td>{x.helpsUsed}/3</td><td><Pill kind={state.serverTime - x.lastSeen < 15000 ? "green" : "muted"}>{x.status}</Pill></td></tr>)}</tbody></table></section><aside className="detail"><header><b>{String(person.name || "—").slice(0, 2)}</b><span><h3>{person.name}</h3><small>{person.id} · {person.college}</small></span></header><div className="meta"><span>LANGUAGE<b>{person.language || "Not selected"}</b></span><span>SOLVED<b>{person.solved}/5</b></span><span>COINS<b className="gold">{person.coins}</b></span><span>HELP USED<b>{person.helpsUsed}/3</b></span></div><h4>SERVER RECORD</h4><div className="prow"><b>QUIZ</b><span>Correct answers<small>{person.quizCorrect}/40</small></span><Check/></div><div className="prow"><b>CODE</b><span>Coding points<small>{person.codingScore}</small></span><Check/></div><div className="prow"><b>STATE</b><span>Current question<small>Q{person.currentQuestion}</small></span><Lock/></div><div className="manual-score"><h4>MANUAL SCORE OVERRIDE</h4><p>Use only when automated judging is unavailable. Every change is audited.</p><div><input aria-label="Score adjustment" inputMode="numeric" placeholder="+300 or -100" value={scoreDelta} onChange={(e) => setScoreDelta(e.target.value)}/><input aria-label="Adjustment reason" maxLength={200} placeholder="Reason for adjustment" value={scoreReason} onChange={(e) => setScoreReason(e.target.value)}/><button onClick={adjustScore}>APPLY</button></div></div><footer><button onClick={() => moderate(person.locked ? "unlock" : "lock")}>{person.locked ? "UNLOCK" : "LOCK"} PARTICIPANT</button><button className="danger" onClick={() => moderate("disqualify")}>DISQUALIFY</button></footer></aside></div></main></div>;
 }
