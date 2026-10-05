@@ -19,8 +19,6 @@ const javaImage = process.env.JAVA_SANDBOX_IMAGE || "eclipse-temurin:21-jdk-jamm
 let running = true;
 let active = false;
 let databaseHealthy = false;
-let processed = 0;
-let failed = 0;
 
 type Job = { id: string; submission_id: string; participant_id: string; question_id: number; language: "Python" | "Java"; source: string; attempts: number };
 type TestCase = { input: string; expected_output: string };
@@ -91,7 +89,6 @@ async function complete(job: Job, passed: number, total: number) {
     }
     await tx`UPDATE submission_jobs SET status='completed', result_json=${tx.json({ passed, total, accepted })}, last_error=NULL, updated_at=now() WHERE id=${job.id}`;
   });
-  processed++;
 }
 
 async function failJob(job: Job, error: unknown) {
@@ -101,7 +98,6 @@ async function failJob(job: Job, error: unknown) {
     await tx`UPDATE submission_jobs SET status=${terminal ? "failed" : "queued"}, locked_at=NULL, locked_by=NULL, last_error=${message}, updated_at=now() WHERE id=${job.id}`;
     if (terminal) await tx`UPDATE submissions SET verdict='failed', completed_at=${Date.now()} WHERE id=${job.submission_id}`;
   });
-  failed++;
 }
 
 async function processJob(job: Job) {
@@ -152,10 +148,6 @@ async function loop() {
 }
 
 const healthServer = createServer((request, response) => {
-  if (request.url === "/metrics") {
-    response.setHeader("content-type", "text/plain; version=0.0.4");
-    return response.end(`code_auction_worker_up 1\ncode_auction_worker_active ${active ? 1 : 0}\ncode_auction_jobs_processed_total ${processed}\ncode_auction_jobs_failed_total ${failed}\n`);
-  }
   response.statusCode = request.url === "/health" ? (databaseHealthy ? 200 : 503) : 404;
   response.setHeader("content-type", "application/json");
   response.end(JSON.stringify(request.url === "/health" ? { ok: databaseHealthy, workerId, active, database: databaseHealthy ? "connected" : "unavailable" } : { error: "not found" }));

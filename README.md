@@ -74,13 +74,12 @@ The web app polls the central state every two seconds during active rounds and s
 |---|---|---|
 | Next.js development | `npm run dev` | 5173 |
 | Next.js production (local) | `npm run build && npm start` | 3000 |
-| Judge worker health/metrics | `npm run worker:build && npm run worker:start` | 9091 |
+| Judge worker health | `npm run worker:build && npm run worker:start` | 9091 |
 
 Health endpoints:
 
 - Web/database/queue: `/api/health`
 - Worker: `http://127.0.0.1:9091/health`
-- Worker Prometheus metrics: `http://127.0.0.1:9091/metrics`
 
 ## Production checklist
 
