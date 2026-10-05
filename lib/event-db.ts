@@ -1,11 +1,5 @@
-import { env } from "cloudflare:workers";
 import { hashPassword, randomSalt } from "./event-auth";
-
-export function db() {
-  const value = (env as unknown as { DB?: D1Database }).DB;
-  if (!value) throw new Error("D1 binding DB is unavailable");
-  return value;
-}
+import { db } from "./postgres";
 
 const baseQuiz = [
   ["Data Structures", "Which data structure follows FIFO?", ["Stack", "Queue", "Tree", "Graph"], 1],
@@ -26,47 +20,39 @@ const coding = [
   { id: 5, title: "First Non-Repeating Character", difficulty: "HARD", points: 800, statement: "Find the first character that appears exactly once, or print -1.", input: "A single line containing the string.", output: "Print the first non-repeating character or -1.", sampleIn: "aabbcdde", sampleOut: "c", hints: ["First count all characters.", "Then scan the original string again.", "Return the first character whose count equals one."], tests: [["aabbcdde","c"],["aabbcc","-1"],["z","z"],["swiss","w"],["aAbBABac","b"]] },
 ];
 
+export { db };
+
 export async function ensureSeeded() {
   const database = db();
-  const existing = await database.prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>();
-  if ((existing?.count || 0) > 0) return;
-  const now = Date.now();
-  const userStatements: D1PreparedStatement[] = [];
-  const identities = [
-    ["HOST-01", "host", "Host Admin", "TECHX Madras 26"],
-    ...Array.from({ length: 10 }, (_, i) => ["CA-" + String(1001 + i), "participant", ["Arjun Mehta","Priya Nair","Rahul Sen","Meera Iyer","Kabir Shah","Ananya Rao","Dev Patel","Sara Khan","Vikram Das","Nila Kumar"][i], ["NIT Trichy","PSG Tech","VIT Chennai","CEG Anna University","SRM IST","MIT Chennai","IIT Madras","SSN College","SASTRA","REC Chennai"][i]]),
-  ];
-  const config = env as unknown as Record<string, string>;
-  const hostPassword = config.EVENT_HOST_PASSWORD;
-  const participantPassword = config.EVENT_PARTICIPANT_PASSWORD;
-  if (!hostPassword || hostPassword.length < 12 || !participantPassword || participantPassword.length < 12) {
-    throw new Error("EVENT_HOST_PASSWORD and EVENT_PARTICIPANT_PASSWORD must each contain at least 12 characters");
-  }
-  for (const [id, role, name, college] of identities) {
-    const salt = randomSalt();
-    const hash = await hashPassword(role === "host" ? hostPassword : participantPassword, salt);
-    userStatements.push(database.prepare("INSERT INTO users (id, role, name, college, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id, role, name, college, hash, salt, now));
-    if (role === "participant") userStatements.push(database.prepare("INSERT INTO participants (user_id, last_seen) VALUES (?, ?)").bind(id, now));
-  }
-  userStatements.push(database.prepare("INSERT INTO rounds (id, status, duration_seconds, updated_at) VALUES ('round1', 'waiting', 1800, ?)").bind(now));
-  userStatements.push(database.prepare("INSERT INTO rounds (id, status, duration_seconds, updated_at) VALUES ('round2', 'waiting', 7200, ?)").bind(now));
-  await database.batch(userStatements);
-
-  const quizStatements: D1PreparedStatement[] = [];
-  for (let i = 0; i < 40; i++) {
-    const q = baseQuiz[i % baseQuiz.length];
-    const difficulty = i < 15 ? "EASY" : i < 30 ? "MEDIUM" : "HARD";
-    const value = difficulty === "EASY" ? 20 : difficulty === "MEDIUM" ? 40 : 70;
-    quizStatements.push(database.prepare("INSERT INTO quiz_questions (category, difficulty, prompt, options_json, correct_index, coin_value) VALUES (?, ?, ?, ?, ?, ?)").bind(q[0], difficulty, q[1], JSON.stringify(q[2]), q[3], value));
-  }
-  await database.batch(quizStatements);
-
-  const codingStatements: D1PreparedStatement[] = [];
-  for (const q of coding) {
-    codingStatements.push(database.prepare("INSERT INTO coding_questions (id, title, difficulty, points, statement, input_format, output_format, sample_input, sample_output, hints_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(q.id, q.title, q.difficulty, q.points, q.statement, q.input, q.output, q.sampleIn, q.sampleOut, JSON.stringify(q.hints)));
-    q.tests.forEach((test, index) => codingStatements.push(database.prepare("INSERT INTO test_cases (question_id, input, expected_output, position) VALUES (?, ?, ?, ?)").bind(q.id, test[0], test[1], index + 1)));
-  }
-  await database.batch(codingStatements);
+  await database.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext('code-auction-seed'))`;
+    const [{ count }] = await tx<{ count: number }[]>`SELECT count(*)::int AS count FROM users`;
+    if (count > 0) return;
+    const hostPassword = process.env.EVENT_HOST_PASSWORD;
+    const participantPassword = process.env.EVENT_PARTICIPANT_PASSWORD;
+    if (!hostPassword || hostPassword.length < 12 || !participantPassword || participantPassword.length < 12) throw new Error("Event passwords must each contain at least 12 characters");
+    const now = Date.now();
+    const names = ["Arjun Mehta","Priya Nair","Rahul Sen","Meera Iyer","Kabir Shah","Ananya Rao","Dev Patel","Sara Khan","Vikram Das","Nila Kumar"];
+    const colleges = ["NIT Trichy","PSG Tech","VIT Chennai","CEG Anna University","SRM IST","MIT Chennai","IIT Madras","SSN College","SASTRA","REC Chennai"];
+    const identities = [{ id: "HOST-01", role: "host", name: "Host Admin", college: "TECHX Madras 26" }, ...names.map((name, i) => ({ id: `CA-${1001 + i}`, role: "participant", name, college: colleges[i] }))];
+    for (const user of identities) {
+      const salt = randomSalt();
+      const hash = await hashPassword(user.role === "host" ? hostPassword : participantPassword, salt);
+      await tx`INSERT INTO users (id, role, name, college, password_hash, password_salt, created_at) VALUES (${user.id}, ${user.role}, ${user.name}, ${user.college}, ${hash}, ${salt}, ${now})`;
+      if (user.role === "participant") await tx`INSERT INTO participants (user_id, last_seen) VALUES (${user.id}, ${now})`;
+    }
+    await tx`INSERT INTO rounds (id, status, duration_seconds, updated_at) VALUES ('round1', 'waiting', 1800, ${now}), ('round2', 'waiting', 7200, ${now})`;
+    for (let i = 0; i < 40; i++) {
+      const q = baseQuiz[i % baseQuiz.length];
+      const difficulty = i < 15 ? "EASY" : i < 30 ? "MEDIUM" : "HARD";
+      const value = difficulty === "EASY" ? 20 : difficulty === "MEDIUM" ? 40 : 70;
+      await tx`INSERT INTO quiz_questions (category, difficulty, prompt, options_json, correct_index, coin_value) VALUES (${q[0]}, ${difficulty}, ${q[1]}, ${tx.json([...q[2]])}, ${q[3]}, ${value})`;
+    }
+    for (const q of coding) {
+      await tx`INSERT INTO coding_questions (id, title, difficulty, points, statement, input_format, output_format, sample_input, sample_output, hints_json) VALUES (${q.id}, ${q.title}, ${q.difficulty}, ${q.points}, ${q.statement}, ${q.input}, ${q.output}, ${q.sampleIn}, ${q.sampleOut}, ${tx.json(q.hints)})`;
+      for (const [index, test] of q.tests.entries()) await tx`INSERT INTO test_cases (question_id, input, expected_output, position) VALUES (${q.id}, ${test[0]}, ${test[1]}, ${index + 1})`;
+    }
+  });
 }
 
 export function remaining(round: { status: string; duration_seconds: number; started_at: number | null; paused_at: number | null; accumulated_pause_seconds: number }) {

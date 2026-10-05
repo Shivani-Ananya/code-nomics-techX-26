@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Image from "next/image";
 import { Activity, Braces, Check, Clock3, Code2, Coins, Lock, Pause, Play, ShieldCheck, ShoppingCart, Trophy, Users, LogOut } from "lucide-react";
 
 type EventState = {
@@ -12,6 +13,7 @@ type EventState = {
   answers?: { questionId: number; answerIndex: number }[];
   problems?: any[];
   purchases?: any[];
+  latestSubmission?: { status: "queued" | "running" | "completed" | "failed"; passedCount: number; verdict: string; lastError?: string; createdAt: number; completedAt?: number } | null;
   judgeConfigured?: boolean;
   serverTime: number;
 };
@@ -38,7 +40,7 @@ function LogoutButton({ compact = false }: { compact?: boolean }) {
 }
 
 function Logo() {
-  return <div className="logo"><img src="/techx-logo.png" alt="TECHX Madras 26"/><span><strong>CODE AUCTION</strong><small>TECHX MADRAS 26</small></span></div>;
+  return <div className="logo"><Image src="/techx-logo.png" alt="TECHX Madras 26" width={170} height={64} priority/><span><strong>CODE AUCTION</strong><small>TECHX MADRAS 26</small></span></div>;
 }
 function Pill({ children, kind = "cyan" }: { children: React.ReactNode; kind?: string }) {
   return <em className={"pill " + kind}>{children}</em>;
@@ -61,13 +63,16 @@ export default function Home() {
     try { setState(await request()); } catch (e) { if ((e as Error).message !== "Authentication required") setError((e as Error).message); }
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
+  const sessionRole = state?.session.role;
+  const round1Status = state?.rounds.round1?.status;
+  const round2Status = state?.rounds.round2?.status;
   useEffect(() => {
-    if (!state) return;
-    const participantIsActive = state.session.role === "participant" && (state.rounds.round1?.status === "active" || state.rounds.round2?.status === "active");
-    const delay = state.session.role === "host" || participantIsActive ? 2000 : 5000;
+    if (!sessionRole) return;
+    const participantIsActive = sessionRole === "participant" && (round1Status === "active" || round2Status === "active");
+    const delay = sessionRole === "host" || participantIsActive ? 2000 : 5000;
     const timer = setInterval(refresh, delay);
     return () => clearInterval(timer);
-  }, [refresh, state?.session.role, state?.rounds.round1?.status, state?.rounds.round2?.status]);
+  }, [refresh, sessionRole, round1Status, round2Status]);
 
   const login = async () => {
     setLoading(true); setError("");
@@ -78,7 +83,7 @@ export default function Home() {
 
   if (!state) return <main className="login"><header><Logo/><span className="online"><i/> CENTRAL EVENT SERVER</span></header><section><div className="intro"><Pill>PRODUCTION CONTROL</Pill><h1>THINK FAST.<br/><span>CODE FASTER.</span></h1><p>Scores, coins, timers, purchases, submissions and ranks are verified and stored by the event server.</p><div className="steps"><b>01 <small>QUIZ<br/>EARN COINS</small></b><b>02 <small>CODE<br/>SOLVE & BID</small></b><b>03 <small>WIN<br/>CLIMB THE BOARD</small></b></div></div><div className="loginbox"><div className="tabs"><button className={role === "participant" ? "active" : ""} onClick={() => { setRole("participant"); setId(""); setPassword(""); setError(""); }}><Users/> Participant</button><button className={role === "host" ? "active" : ""} onClick={() => { setRole("host"); setId(""); setPassword(""); setError(""); }}><ShieldCheck/> Host</button></div><h2>{role === "host" ? "HOST CONTROL ACCESS" : "JOIN THE EVENT"}</h2><p>Use the credentials issued by the event team.</p><label>{role === "host" ? "ADMIN ID" : "PARTICIPANT ID"}<input autoComplete="username" placeholder={role === "host" ? "Enter host ID" : "Enter participant ID"} value={id} onChange={(e) => setId(e.target.value)}/></label><label>EVENT PASSWORD<input autoComplete="current-password" placeholder="Enter event password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && login()}/></label>{error && <p className="api-error" role="alert">{error}</p>}<button className="primary" disabled={loading || !id.trim() || !password} onClick={login}>{loading ? "AUTHENTICATING…" : role === "host" ? "OPEN CONTROL ROOM" : "JOIN EVENT"}</button><small className="secure"><Lock/> Signed HttpOnly session · Server-authorized actions</small></div></section></main>;
 
-  if (state.session.role === "host") return <Host state={state} setState={setState} setError={setError}/>;
+  if (state.session.role === "host") return <Host state={state} setState={setState} setError={setError} error={error}/>;
   const p = state.participant;
   const r1 = state.rounds.round1;
   const r2 = state.rounds.round2;
@@ -121,7 +126,7 @@ function Quiz({ state, setState, setError }: { state: EventState; setState: (s: 
   return <div className="app"><Top state={state} label="ROUND 1 / QUIZ"/><main className="quiz"><section className="question"><div className="eyebrow">QUESTION {current + 1} / 40 <Pill kind={q.difficulty.toLowerCase()}>{q.difficulty}</Pill></div><small>{q.category}</small><h2>{q.prompt}</h2><div className="answers">{q.options.map((option: string, index: number) => <button className={answers[q.id] === index ? "chosen" : ""} onClick={() => answer(index)} key={option}><b>{String.fromCharCode(65 + index)}</b>{option}{answers[q.id] === index && <Check/>}</button>)}</div><footer><button onClick={() => setCurrent(Math.max(0, current - 1))}>Previous</button><button className="submit" onClick={submit}>SUBMIT QUIZ</button><button onClick={() => setCurrent(Math.min(39, current + 1))}>Next</button></footer></section><aside><div className="balance"><small>SERVER BALANCE</small><b><Coins/> {state.participant.coins}</b><span>VIRTUAL COINS</span></div><div className="nav"><header><b>QUESTION NAVIGATOR</b><span>{Object.keys(answers).length}/40 answered</span></header><div>{state.quiz!.map((item, index) => <button key={item.id} onClick={() => setCurrent(index)} className={(current === index ? "current " : "") + (answers[item.id] !== undefined ? "answered" : "")}>{index + 1}</button>)}</div></div></aside></main></div>;
 }
 
-function Language({ state, setState, setError }: { state: EventState; setState: (s: EventState) => void; setError: (s: string) => void }) {
+function Language({ setState, setError }: { state: EventState; setState: (s: EventState) => void; setError: (s: string) => void }) {
   const [language, setLanguage] = useState<"Python" | "Java">("Python");
   const confirmLanguage = async () => {
     if (!confirm("Lock " + language + " for Round 2? This cannot be changed.")) return;
@@ -134,25 +139,33 @@ function Coding({ state, setState, setError }: { state: EventState; setState: (s
   const p = state.participant;
   const [question, setQuestion] = useState(Math.max(0, p.currentQuestion - 1));
   const [source, setSource] = useState(p.language === "Python" ? "def solve():\n    # Write your solution\n    pass\n\nif __name__ == '__main__':\n    solve()\n" : "import java.util.*;\npublic class Main {\n  public static void main(String[] args) {\n    // Write your solution\n  }\n}\n");
-  const [output, setOutput] = useState(state.judgeConfigured ? "Judge0 is ready." : "Judge0 is not configured. Ask the host to add the judge service.");
+  const [output, setOutput] = useState(state.judgeConfigured ? "Judge queue is ready." : "Judge queue is disabled. Ask the host to enable it.");
   const [market, setMarket] = useState(false);
   const problem = state.problems![question];
   const buy = async (kind: string) => {
     if (!confirm("Purchase this help? Coins are deducted permanently.")) return;
     try { setState(await request({ action: "purchase-help", kind })); setMarket(false); } catch (e) { setError((e as Error).message); }
   };
+  useEffect(() => {
+    const submission = state.latestSubmission;
+    if (!submission) return;
+    if (submission.status === "queued") setOutput("Submission queued. Waiting for the sandbox worker…");
+    else if (submission.status === "running") setOutput("Sandbox worker is executing five hidden test cases…");
+    else if (submission.status === "completed") setOutput(`Hidden tests passed: ${submission.passedCount}/5${submission.verdict === "accepted" ? "\nPROBLEM SOLVED — next question unlocked." : ""}`);
+    else setOutput(submission.lastError || "The judge could not process this submission. You may retry.");
+  }, [state.latestSubmission]);
   const submit = async () => {
-    setOutput("Judging against five hidden test cases…");
+    setOutput("Adding submission to the secure judge queue…");
     try {
       const data = await request({ action: "submit-code", source });
-      setOutput("Hidden tests passed: " + data.passed + "/5" + (data.solved ? "\nPROBLEM SOLVED — next question unlocked." : ""));
+      setOutput("Submission queued. Waiting for the sandbox worker…");
       if (data.state) setState(data.state);
     } catch (e) { setOutput((e as Error).message); }
   };
   return <div className="ide"><Top state={state} label="ROUND 2 / CODING"/><div className="problemtabs"><div>{state.problems!.map((item, index) => <button disabled={index >= p.currentQuestion} className={index === question ? "active" : index < p.currentQuestion - 1 ? "done" : ""} onClick={() => setQuestion(index)} key={item.id}>{index < p.currentQuestion - 1 ? <Check/> : index >= p.currentQuestion ? <Lock/> : "Q" + (index + 1)}<small>{item.difficulty}</small></button>)}</div><aside><span><Coins/> {p.coins}</span><span>HELP {p.helpsUsed}/3</span><span>RANK #{state.leaderboard.findIndex((x) => x.id === p.id) + 1}</span><button onClick={() => setMarket(true)}><ShoppingCart/> HELP MARKETPLACE</button></aside></div><main className="workspace"><section className="brief"><div className="eyebrow">QUESTION {question + 1} <Pill kind={problem.difficulty.toLowerCase()}>{problem.difficulty}</Pill><b>{problem.points} PTS</b></div><h2>{problem.title}</h2><p>{problem.statement}</p><h4>INPUT FORMAT</h4><p>{problem.inputFormat}</p><h4>OUTPUT FORMAT</h4><p>{problem.outputFormat}</p><div className="examples"><pre><small>EXAMPLE INPUT</small>{"\n"}{problem.sampleInput}</pre><pre><small>EXAMPLE OUTPUT</small>{"\n"}{problem.sampleOutput}</pre></div></section><section className="codearea"><header><Code2/> solution.{p.language === "Python" ? "py" : "java"}<span>{p.language} · UTF-8</span></header><textarea spellCheck={false} value={source} onChange={(e) => setSource(e.target.value)}/><div className="console"><b>SERVER CONSOLE</b><pre>{output}</pre></div><footer><button onClick={() => setOutput("Sample output expected: " + problem.sampleOutput)}>CHECK SAMPLE</button><button className="submit" disabled={!state.judgeConfigured} onClick={submit}>SUBMIT TO JUDGE</button></footer></section></main>{market && <div className="overlay" onClick={() => setMarket(false)}><div className="market" onClick={(e) => e.stopPropagation()}><header><h2><ShoppingCart/> Help marketplace</h2><button onClick={() => setMarket(false)}>×</button></header><p>Every purchase is validated and logged by the server.</p>{[["small","Small hint",200],["algorithm","Algorithm hint",300],["pseudocode","Pseudocode / key logic",450],["reveal","50% code reveal",650],["ai","AI assistance · 3 messages",800]].map(([kind, name, cost]) => <button key={kind} disabled={p.helpsUsed >= 3 || p.coins < Number(cost)} onClick={() => buy(String(kind))}><span><b>{name}</b><small>Tailored to {p.language}</small></span><strong>{cost} COINS</strong></button>)}<footer>BALANCE <b>{p.coins}</b><span>HELP USED <b>{p.helpsUsed}/3</b></span></footer></div></div>}</div>;
 }
 
-function Host({ state, setState, setError }: { state: EventState; setState: (s: EventState) => void; setError: (s: string) => void }) {
+function Host({ state, setState, setError, error }: { state: EventState; setState: (s: EventState) => void; setError: (s: string) => void; error: string }) {
   const [selected, setSelected] = useState(0);
   const [scoreDelta, setScoreDelta] = useState("");
   const [scoreReason, setScoreReason] = useState("");

@@ -9,6 +9,8 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    "dist/**",
+    "worker/dist/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
@@ -20,6 +22,13 @@ const eslintConfig = defineConfig([
       // registry source intact while applying the stricter rules to Site code.
       "@typescript-eslint/no-unused-vars": "off",
       "react-hooks/purity": "off",
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
+    files: ["app/page.tsx"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
       "react-hooks/set-state-in-effect": "off",
     },
   },

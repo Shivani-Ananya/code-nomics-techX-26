@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-auction-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: code-auction-worker }
+  template:
+    metadata:
+      labels: { app: code-auction-worker }
+    spec:
+      containers:
+        - name: worker
+          image: code-auction-worker:latest
+          ports:
+            - { name: health, containerPort: 9091 }
+          envFrom:
+            - secretRef: { name: code-auction-worker-env }
+          volumeMounts:
+            - { name: docker-socket, mountPath: /var/run/docker.sock }
+            - { name: worker-data, mountPath: /opt/code-auction/worker-data }
+          readinessProbe:
+            httpGet: { path: /health, port: health }
+          livenessProbe:
+            httpGet: { path: /health, port: health }
+      volumes:
+        - name: docker-socket
+          hostPath: { path: /var/run/docker.sock, type: Socket }
+        - name: worker-data
+          hostPath: { path: /opt/code-auction/worker-data, type: DirectoryOrCreate }

@@ -1,0 +1,17 @@
+services:
+  judge-worker:
+    build: .
+    restart: unless-stopped
+    env_file: .env.worker
+    environment:
+      WORKER_WORKSPACE_ROOT: /opt/code-auction/worker-data
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/code-auction/worker-data:/opt/code-auction/worker-data
+    ports:
+      - "127.0.0.1:9091:9091"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9091/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

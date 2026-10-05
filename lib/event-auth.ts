@@ -1,5 +1,3 @@
-import { env } from "cloudflare:workers";
-
 export type Session = { id: string; role: "host" | "participant"; exp: number };
 const encoder = new TextEncoder();
 
@@ -31,7 +29,7 @@ export async function hashPassword(password: string, salt: string) {
 }
 
 function secret() {
-  const value = (env as unknown as Record<string, string>).SESSION_SECRET;
+  const value = process.env.SESSION_SECRET;
   if (!value || value.length < 32) throw new Error("SESSION_SECRET must contain at least 32 characters");
   return value;
 }
@@ -62,12 +60,12 @@ export async function readSession(request: Request): Promise<Session | null> {
 }
 
 export function sessionCookie(token: string, request: Request) {
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const secure = process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:" ? "; Secure" : "";
   return "ca_session=" + token + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200" + secure;
 }
 
 export function clearSessionCookie(request: Request) {
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const secure = process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:" ? "; Secure" : "";
   return "ca_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0" + secure;
 }
 
