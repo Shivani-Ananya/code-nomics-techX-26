@@ -196,7 +196,16 @@ async function submitCode(request: Request, body: Body) {
   return json({ queued: true, submissionId: String(submissionId), state: await (await snapshot(request)).json() }, 202);
 }
 
-export async function GET(request: Request) { try { await ensureSeeded(); return await snapshot(request); } catch (error) { console.error(error); return json({ error: process.env.SUPABASE_DATABASE_URL ? "Event service unavailable" : "Database is not configured. Add SUPABASE_DATABASE_URL to .env.local and restart the server." }, 503); } }
+function serviceError(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  if (/SUPABASE_DATABASE_URL|SESSION_SECRET|EVENT_HOST_PASSWORD|EVENT_PARTICIPANT_PASSWORD|Database is not configured|must contain at least|must use a postgres:/i.test(message)) return message;
+  if (/ENOTFOUND|getaddrinfo/i.test(message)) return "Supabase cannot be reached. Use the IPv4 Transaction pooler connection string from the Supabase Connect dialog.";
+  if (/password authentication failed|Tenant or user not found/i.test(message)) return "Supabase rejected the database credentials. Copy a fresh Transaction pooler string and replace [YOUR-PASSWORD] with your URL-encoded password.";
+  if (/relation .* does not exist/i.test(message)) return "The database is connected but not initialized. Run npm run db:migrate and refresh this page.";
+  return "Event service unavailable";
+}
+
+export async function GET(request: Request) { try { await ensureSeeded(); return await snapshot(request); } catch (error) { console.error(error); return json({ error: serviceError(error) }, 503); } }
 export async function POST(request: Request) {
   let body: Body; try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
   try {
@@ -216,7 +225,8 @@ export async function POST(request: Request) {
     console.error(error);
     const message = error instanceof Error ? error.message : "";
     const safeMessages = new Set(["Participant not found", "Purchase limit or balance check failed", "Submissions are currently locked", "A submission is already queued or running"]);
-    if (!process.env.SUPABASE_DATABASE_URL) return json({ error: "Database is not configured. Add SUPABASE_DATABASE_URL to .env.local and restart the server." }, 503);
+    const databaseError = serviceError(error);
+    if (databaseError !== "Event service unavailable") return json({ error: databaseError }, 503);
     return safeMessages.has(message) ? json({ error: message }, 409) : json({ error: "Request could not be completed" }, 500);
   }
 }

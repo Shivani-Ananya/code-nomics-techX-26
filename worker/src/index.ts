@@ -4,8 +4,20 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import postgres from "postgres";
 
-const databaseUrl = process.env.SUPABASE_DATABASE_URL;
-if (!databaseUrl) throw new Error("SUPABASE_DATABASE_URL is required");
+function resolveDatabaseUrl() {
+  const value = process.env.SUPABASE_DATABASE_URL?.trim();
+  if (!value) throw new Error("SUPABASE_DATABASE_URL is required. Copy .env.worker.example to .env.worker and set a real Supabase pooler URL.");
+  if (/your[-_ ]?supabase|replace-with|example|changeme/i.test(value)) throw new Error("SUPABASE_DATABASE_URL is still a placeholder. Replace it with your real Supabase pooler connection string in .env.worker.");
+  try {
+    const parsed = new URL(value);
+    if (!/^(postgres|postgresql):$/.test(parsed.protocol)) throw new Error("SUPABASE_DATABASE_URL must use a postgres:// or postgresql:// URL.");
+    return value;
+  } catch {
+    throw new Error("SUPABASE_DATABASE_URL must be a valid postgres:// or postgresql:// connection string.");
+  }
+}
+
+const databaseUrl = resolveDatabaseUrl();
 const sql = postgres(databaseUrl, { max: 2, prepare: false, ssl: process.env.SUPABASE_DB_SSL === "false" ? false : "require" });
 const workerId = process.env.WORKER_ID || `judge-${process.pid}`;
 const pollMs = Number(process.env.WORKER_POLL_INTERVAL_MS || 1000);

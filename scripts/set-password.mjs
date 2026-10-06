@@ -1,7 +1,20 @@
 import { pbkdf2Sync, randomBytes } from "node:crypto";
 import postgres from "postgres";
 
-const url = process.env.SUPABASE_DATABASE_URL;
+function resolveDatabaseUrl() {
+  const value = process.env.SUPABASE_DATABASE_URL?.trim();
+  if (!value) throw new Error("SUPABASE_DATABASE_URL is required in .env.local");
+  if (/your[-_ ]?supabase|replace-with|example|changeme/i.test(value)) throw new Error("SUPABASE_DATABASE_URL is still a placeholder. Replace it with your real Supabase pooler connection string in .env.local.");
+  try {
+    const parsed = new URL(value);
+    if (!/^(postgres|postgresql):$/.test(parsed.protocol)) throw new Error("SUPABASE_DATABASE_URL must use a postgres:// or postgresql:// URL.");
+    return value;
+  } catch {
+    throw new Error("SUPABASE_DATABASE_URL must be a valid postgres:// or postgresql:// connection string.");
+  }
+}
+
+const url = resolveDatabaseUrl();
 const password = process.env.NEW_PASSWORD;
 const args = process.argv.slice(2);
 const idIndex = args.indexOf("--id");
