@@ -1151,10 +1151,22 @@ function Host({
         : true,
   );
   const control = async (round: string, action: string, seconds?: number) => {
+    const roundState = state.rounds[round];
+    if (
+      action === "start" &&
+      roundState?.status !== "waiting" &&
+      !(await ask(
+        `This will restart the ${round === "round1" ? "Round 1" : "Round 2"} server timer from the beginning. Existing answers and scores will be preserved.`,
+        `Restart ${round === "round1" ? "Round 1" : "Round 2"} timer?`,
+      ))
+    )
+      return;
     if (
       (action === "end" || action === "publish") &&
       !(await ask(
-        "This action affects every participant and cannot be silently reversed.",
+        action === "end"
+          ? "This stops the selected round for every participant. You can explicitly restart its timer later."
+          : "This makes the final Round 2 results visible to participants.",
         action === "end" ? "End the round?" : "Publish results?",
       ))
     )
@@ -1168,6 +1180,7 @@ function Host({
           seconds,
         }),
       );
+      setError("");
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1223,7 +1236,24 @@ function Host({
       setError((e as Error).message);
     }
   };
-  const status = state.rounds.round2?.status;
+  const round1 = state.rounds.round1;
+  const round2 = state.rounds.round2;
+  const liveRoundId =
+    round2?.status === "active" || round2?.status === "paused"
+      ? "round2"
+      : round1?.status === "active" || round1?.status === "paused"
+        ? "round1"
+        : null;
+  const displayRoundId =
+    liveRoundId || (round2?.status === "ended" ? "round2" : "round1");
+  const displayRound = state.rounds[displayRoundId];
+  const displayStatus = String(displayRound?.status || "waiting");
+  const startLabel = (round: any, number: number) =>
+    round?.status === "waiting"
+      ? `START ROUND ${number}`
+      : round?.status === "active"
+        ? `RESTART TIMER ${number}`
+        : `RESTART ROUND ${number}`;
   const online = state.leaderboard.filter(
     (x) => state.serverTime - x.lastSeen < 15000,
   ).length;
@@ -1263,9 +1293,21 @@ function Host({
             <h1>Central Event Operations</h1>
           </div>
           <div>
-            <small>ROUND 2 SERVER TIMER</small>
-            <b>{formatTime(state.rounds.round2?.remainingSeconds || 0)}</b>
-            <Pill kind="green">{status?.toUpperCase()}</Pill>
+            <small>
+              {displayRoundId === "round1" ? "ROUND 1" : "ROUND 2"} SERVER TIMER
+            </small>
+            <b>{formatTime(displayRound?.remainingSeconds || 0)}</b>
+            <Pill
+              kind={
+                displayStatus === "ended"
+                  ? "hard"
+                  : displayStatus === "paused"
+                    ? "medium"
+                    : "green"
+              }
+            >
+              {displayStatus.toUpperCase()}
+            </Pill>
             <Pill kind={state.judgeConfigured ? "green" : "hard"}>
               {state.judgeConfigured ? "JUDGE ONLINE" : "MANUAL JUDGE"}
             </Pill>
@@ -1274,23 +1316,45 @@ function Host({
         {error && <p className="api-error">{error}</p>}
         <div className="controls">
           <button className="start" onClick={() => control("round1", "start")}>
-            <Play /> START ROUND 1
+            <Play /> {startLabel(round1, 1)}
           </button>
           <button className="start" onClick={() => control("round2", "start")}>
-            <Play /> START ROUND 2
+            <Play /> {startLabel(round2, 2)}
           </button>
           <button
+            disabled={!liveRoundId}
             onClick={() =>
-              control("round2", status === "paused" ? "resume" : "pause")
+              liveRoundId &&
+              control(
+                liveRoundId,
+                state.rounds[liveRoundId]?.status === "paused"
+                  ? "resume"
+                  : "pause",
+              )
             }
           >
-            <Pause /> {status === "paused" ? "RESUME" : "PAUSE"}
+            <Pause />{" "}
+            {liveRoundId && state.rounds[liveRoundId]?.status === "paused"
+              ? "RESUME"
+              : "PAUSE"}
           </button>
-          <button onClick={() => control("round2", "add", 300)}>+5 MIN</button>
-          <button className="danger" onClick={() => control("round2", "end")}>
-            END ROUND
+          <button
+            disabled={!liveRoundId}
+            onClick={() => liveRoundId && control(liveRoundId, "add", 300)}
+          >
+            +5 MIN
           </button>
-          <button onClick={() => control("round2", "publish")}>
+          <button
+            disabled={!liveRoundId}
+            className="danger"
+            onClick={() => liveRoundId && control(liveRoundId, "end")}
+          >
+            END {liveRoundId === "round1" ? "ROUND 1" : "ROUND 2"}
+          </button>
+          <button
+            disabled={round2?.status !== "ended"}
+            onClick={() => control("round2", "publish")}
+          >
             PUBLISH RESULTS
           </button>
         </div>

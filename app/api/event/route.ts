@@ -194,21 +194,50 @@ async function hostAction(request: Request, body: Body) {
     id = String(body.round || "round2"),
     action = String(body.control || ""),
     now = Date.now();
+  if (id !== "round1" && id !== "round2")
+    return json({ error: "Invalid round" }, 400);
   const [round] = await database`SELECT * FROM rounds WHERE id=${id}`;
   if (!round) return json({ error: "Round not found" }, 404);
   if (action === "start")
-    await database`UPDATE rounds SET status='active', started_at=COALESCE(started_at, ${now}), paused_at=NULL, updated_at=${now} WHERE id=${id}`;
+    await database.begin(async (tx) => {
+      await tx`UPDATE rounds SET status='ended', paused_at=NULL, updated_at=${now} WHERE id<>${id} AND status IN ('active','paused')`;
+      await tx`UPDATE rounds SET status='active', started_at=${now}, paused_at=NULL, accumulated_pause_seconds=0, results_published=false, updated_at=${now} WHERE id=${id}`;
+    });
   else if (action === "pause" && round.status === "active")
     await database`UPDATE rounds SET status='paused', paused_at=${now}, updated_at=${now} WHERE id=${id}`;
   else if (action === "resume" && round.status === "paused")
     await database`UPDATE rounds SET status='active', accumulated_pause_seconds=accumulated_pause_seconds+((${now}-paused_at)/1000)::int, paused_at=NULL, updated_at=${now} WHERE id=${id}`;
-  else if (action === "add")
+  else if (
+    action === "add" &&
+    (round.status === "active" || round.status === "paused")
+  )
     await database`UPDATE rounds SET duration_seconds=duration_seconds+${Math.min(1800, Math.max(0, Number(body.seconds || 0)))}, updated_at=${now} WHERE id=${id}`;
-  else if (action === "end")
+  else if (action === "end" && round.status !== "ended")
     await database`UPDATE rounds SET status='ended', updated_at=${now} WHERE id=${id}`;
-  else if (action === "publish")
+  else if (action === "end" && round.status === "ended") {
+    // Ending an already-ended round is harmless and intentionally idempotent.
+  } else if (
+    action === "publish" &&
+    id === "round2" &&
+    round.status === "ended"
+  )
     await database`UPDATE rounds SET results_published=true, updated_at=${now} WHERE id='round2'`;
-  else return json({ error: "Invalid control transition" }, 400);
+  else
+    return json(
+      {
+        error:
+          action === "pause"
+            ? "Only an active round can be paused"
+            : action === "resume"
+              ? "Only a paused round can be resumed"
+              : action === "add"
+                ? "Start the round before adding time"
+                : action === "publish"
+                  ? "End Round 2 before publishing results"
+                  : "Invalid round control",
+      },
+      400,
+    );
   return snapshot(request);
 }
 
