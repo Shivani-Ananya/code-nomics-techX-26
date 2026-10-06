@@ -22,18 +22,41 @@ npm run dev
 
 The development URL is `http://127.0.0.1:5173`. A normal production `next start` uses port 3000 unless `PORT` is set.
 
-The first authenticated request seeds `HOST-01` and 100 participants, `CA-1001` through `CA-1100`. Both event passwords must be at least 12 characters. Use distinct, randomly generated production passwords.
+The first authenticated request creates only the `HOST-01` account and the default question bank. Participant teams are created by the host from the control room, individually or in bulk. IDs begin at `CA-1001`, and each team’s initial password is exactly its team name.
+
+### Host-managed event data
+
+The host control room can add one team or paste one team name per line for bulk creation. Team names are deduplicated case-insensitively, the next available `CA-` ID is assigned automatically, and the newly created credentials are shown immediately so they can be distributed. Passwords are case-sensitive. Existing teams are never silently replaced; use the per-team remove action or the confirmed **Remove all current teams** action when intentionally resetting an event.
+
+Coding questions can also be added individually or as a bulk JSON array. Each bulk item uses this shape:
+
+```json
+{
+  "title": "Count vowels",
+  "difficulty": "EASY",
+  "points": 300,
+  "statement": "Read a string and print its vowel count.",
+  "inputFormat": "One line of text",
+  "outputFormat": "One integer",
+  "sampleInput": "hello world",
+  "sampleOutput": "3",
+  "hints": ["Check each character"],
+  "tests": [{ "input": "hello world", "expectedOutput": "3" }]
+}
+```
+
+Every question must contain at least one hidden test. The host dashboard also provides dedicated views for all, locked, and disqualified teams.
 
 ## Accounts and passwords
 
-Before the first database seed, set `EVENT_HOST_PASSWORD` and `EVENT_PARTICIPANT_PASSWORD` in `.env.local` for local development and in Vercel Project Settings → Environment Variables for production. Restart the local server after editing `.env.local`.
+Before the first database seed, set `EVENT_HOST_PASSWORD` in `.env.local` for local development and in Vercel Project Settings → Environment Variables for production. Restart the local server after editing `.env.local`.
 
 Once accounts exist, changing those environment variables does not overwrite their passwords. Reset an existing account from PowerShell with:
 
 ```powershell
 $env:NEW_PASSWORD="replace-with-a-secure-password"
 npm run password:set -- --id HOST-01
-# Or reset the shared password for CA-1001 through CA-1100:
+# Or reset every currently registered participant to one password:
 npm run password:set -- --all-participants
 Remove-Item Env:NEW_PASSWORD
 ```
@@ -47,7 +70,6 @@ Use an individual participant ID instead of `--all-participants` to reset only t
 - `DATABASE_POOL_SIZE=5`
 - `SESSION_SECRET`: at least 32 random bytes.
 - `EVENT_HOST_PASSWORD`
-- `EVENT_PARTICIPANT_PASSWORD`
 - `JUDGE_QUEUE_ENABLED=true`
 
 Run `npm run db:migrate` from a trusted machine before the first deployment, then import the repository in Vercel. `vercel.json` selects Next.js and the normal build command.

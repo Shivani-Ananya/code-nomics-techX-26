@@ -95,9 +95,9 @@ async function complete(job: Job, passed: number, total: number) {
     const now = Date.now();
     await tx`UPDATE submissions SET passed_count=${passed}, verdict=${accepted ? "accepted" : "failed"}, judge_reference=${job.id}, completed_at=${now} WHERE id=${job.submission_id}`;
     if (accepted) {
-      const [question] = await tx`SELECT points FROM coding_questions WHERE id=${job.question_id}`;
+      const [question] = await tx`SELECT points, (SELECT count(*)::int FROM coding_questions) AS total_questions FROM coding_questions WHERE id=${job.question_id}`;
       const inserted = await tx`INSERT INTO solved_problems (participant_id, question_id, solved_at, points_awarded) VALUES (${job.participant_id}, ${job.question_id}, ${now}, ${Number(question?.points || 0)}) ON CONFLICT DO NOTHING RETURNING question_id`;
-      if (inserted.length) await tx`UPDATE participants SET solved=solved+1, coding_score=coding_score+${Number(question?.points || 0)}, current_question=LEAST(5,current_question+1), completion_time=CASE WHEN current_question=5 THEN ${now} ELSE completion_time END WHERE user_id=${job.participant_id}`;
+      if (inserted.length) await tx`UPDATE participants SET solved=solved+1, coding_score=coding_score+${Number(question?.points || 0)}, current_question=LEAST(${Number(question?.total_questions || 1) + 1},current_question+1), completion_time=CASE WHEN current_question>=${Number(question?.total_questions || 1)} THEN ${now} ELSE completion_time END WHERE user_id=${job.participant_id}`;
     }
     await tx`UPDATE submission_jobs SET status='completed', result_json=${tx.json({ passed, total, accepted })}, last_error=NULL, updated_at=now() WHERE id=${job.id}`;
   });
