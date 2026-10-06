@@ -22,11 +22,11 @@ npm run dev
 
 The development URL is `http://127.0.0.1:5173`. A normal production `next start` uses port 3000 unless `PORT` is set.
 
-The first authenticated request creates only the `HOST-01` account and the default question bank. Participant teams are created by the host from the control room, individually or in bulk. IDs begin at `CA-1001`, and each team’s initial password is exactly its team name.
+The first authenticated request creates only the `HOST-01` account and the default question bank. Participant teams are created by the host from the control room, individually or in bulk. Participants use their team name as both the login username and initial password. Internal IDs begin at `CA-1001` and are retained only for scoring and database relationships.
 
 ### Host-managed event data
 
-The host control room can add one team or paste one team name per line for bulk creation. Team names are deduplicated case-insensitively, the next available `CA-` ID is assigned automatically, and the newly created credentials are shown immediately so they can be distributed. Passwords are case-sensitive. Existing teams are never silently replaced; use the per-team remove action or the confirmed **Remove all current teams** action when intentionally resetting an event.
+The host control room can add one team or paste one team name per line for bulk creation. Team names are deduplicated case-insensitively, the next internal `CA-` ID is assigned automatically, and the team-name username/password is shown immediately so it can be distributed. Passwords are case-sensitive. Existing teams are never silently replaced; use the per-team remove action or the confirmed **Remove all current teams** action when intentionally resetting an event.
 
 Coding questions can also be added individually or as a bulk JSON array. Each bulk item uses this shape:
 
@@ -108,11 +108,11 @@ The web app polls the central state every two seconds during active rounds and s
 
 ## Commands and ports
 
-| Component | Command | Port |
-|---|---|---|
-| Next.js development | `npm run dev` | 5173 |
-| Next.js production (local) | `npm run build && npm start` | 3000 |
-| Judge worker health | `npm run worker:build && npm run worker:start` | 9091 |
+| Component                  | Command                                        | Port |
+| -------------------------- | ---------------------------------------------- | ---- |
+| Next.js development        | `npm run dev`                                  | 5173 |
+| Next.js production (local) | `npm run build && npm start`                   | 3000 |
+| Judge worker health        | `npm run worker:build && npm run worker:start` | 9091 |
 
 Health endpoints:
 

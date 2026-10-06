@@ -312,11 +312,11 @@ export default function Home() {
             </h2>
             <p>Use the credentials issued by the event team.</p>
             <label>
-              {role === "host" ? "ADMIN ID" : "PARTICIPANT ID"}
+              {role === "host" ? "ADMIN ID" : "TEAM NAME"}
               <input
                 autoComplete="username"
                 placeholder={
-                  role === "host" ? "Enter host ID" : "Enter participant ID"
+                  role === "host" ? "Enter host ID" : "Enter team name"
                 }
                 value={id}
                 onChange={(e) => setId(e.target.value)}
@@ -959,7 +959,8 @@ function TeamManager({
             <b>CREATED CREDENTIALS</b>
             {created.map((team) => (
               <code key={team.id}>
-                {team.id} · {team.name} · password: {team.password}
+                username: {team.name} · password: {team.password} · internal ID:{" "}
+                {team.id}
               </code>
             ))}
           </div>
