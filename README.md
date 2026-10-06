@@ -22,7 +22,23 @@ npm run dev
 
 The development URL is `http://127.0.0.1:5173`. A normal production `next start` uses port 3000 unless `PORT` is set.
 
-The first authenticated request seeds `HOST-01` and participants `CA-1001` through `CA-1010`. Both event passwords must be at least 12 characters. Use distinct, randomly generated production passwords.
+The first authenticated request seeds `HOST-01` and 100 participants, `CA-1001` through `CA-1100`. Both event passwords must be at least 12 characters. Use distinct, randomly generated production passwords.
+
+## Accounts and passwords
+
+Before the first database seed, set `EVENT_HOST_PASSWORD` and `EVENT_PARTICIPANT_PASSWORD` in `.env.local` for local development and in Vercel Project Settings → Environment Variables for production. Restart the local server after editing `.env.local`.
+
+Once accounts exist, changing those environment variables does not overwrite their passwords. Reset an existing account from PowerShell with:
+
+```powershell
+$env:NEW_PASSWORD="replace-with-a-secure-password"
+npm run password:set -- --id HOST-01
+# Or reset the shared password for CA-1001 through CA-1100:
+npm run password:set -- --all-participants
+Remove-Item Env:NEW_PASSWORD
+```
+
+Use an individual participant ID instead of `--all-participants` to reset only that participant, for example `npm run password:set -- --id CA-1001`.
 
 ## Required Vercel variables
 

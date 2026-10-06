@@ -196,26 +196,27 @@ async function submitCode(request: Request, body: Body) {
   return json({ queued: true, submissionId: String(submissionId), state: await (await snapshot(request)).json() }, 202);
 }
 
-export async function GET(request: Request) { try { await ensureSeeded(); return snapshot(request); } catch (error) { console.error(error); return json({ error: "Event service unavailable" }, 503); } }
+export async function GET(request: Request) { try { await ensureSeeded(); return await snapshot(request); } catch (error) { console.error(error); return json({ error: process.env.SUPABASE_DATABASE_URL ? "Event service unavailable" : "Database is not configured. Add SUPABASE_DATABASE_URL to .env.local and restart the server." }, 503); } }
 export async function POST(request: Request) {
   let body: Body; try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
   try {
     const action = String(body.action || "");
-    if (action === "login") return login(request, body);
+    if (action === "login") return await login(request, body);
     if (action === "logout") return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie(request) });
-    if (action === "host-control") return hostAction(request, body);
-    if (action === "participant-control") return participantControl(request, body);
-    if (action === "manual-score") return manualScore(request, body);
-    if (action === "answer") return answerQuestion(request, body);
-    if (action === "submit-quiz") return submitQuiz(request);
-    if (action === "select-language") return selectLanguage(request, body);
-    if (action === "purchase-help") return purchaseHelp(request, body);
-    if (action === "submit-code") return submitCode(request, body);
+    if (action === "host-control") return await hostAction(request, body);
+    if (action === "participant-control") return await participantControl(request, body);
+    if (action === "manual-score") return await manualScore(request, body);
+    if (action === "answer") return await answerQuestion(request, body);
+    if (action === "submit-quiz") return await submitQuiz(request);
+    if (action === "select-language") return await selectLanguage(request, body);
+    if (action === "purchase-help") return await purchaseHelp(request, body);
+    if (action === "submit-code") return await submitCode(request, body);
     return json({ error: "Unknown action" }, 400);
   } catch (error) {
     console.error(error);
     const message = error instanceof Error ? error.message : "";
     const safeMessages = new Set(["Participant not found", "Purchase limit or balance check failed", "Submissions are currently locked", "A submission is already queued or running"]);
+    if (!process.env.SUPABASE_DATABASE_URL) return json({ error: "Database is not configured. Add SUPABASE_DATABASE_URL to .env.local and restart the server." }, 503);
     return safeMessages.has(message) ? json({ error: message }, 409) : json({ error: "Request could not be completed" }, 500);
   }
 }

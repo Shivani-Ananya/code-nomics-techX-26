@@ -21,8 +21,10 @@ type EventState = {
 const formatTime = (seconds: number) => String(Math.floor(Math.max(0, seconds) / 60)).padStart(2, "0") + ":" + String(Math.max(0, seconds) % 60).padStart(2, "0");
 const request = async (body?: Record<string, unknown>) => {
   const response = await fetch("/api/event", body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : { cache: "no-store" });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Request failed");
+  const text = await response.text();
+  let data: any = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+  if (!response.ok) throw new Error(data.error || `Server request failed (${response.status}). Check the server configuration and logs.`);
   return data;
 };
 

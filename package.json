@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "db:migrate": "node scripts/migrate.mjs",
+    "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.mjs",
+    "password:set": "node --env-file-if-exists=.env.local scripts/set-password.mjs",
     "worker:dev": "tsx worker/src/index.ts",
     "worker:build": "tsc -p worker/tsconfig.json",
     "worker:start": "node worker/dist/index.js"

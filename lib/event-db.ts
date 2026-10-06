@@ -26,21 +26,33 @@ export async function ensureSeeded() {
   const database = db();
   await database.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtext('code-auction-seed'))`;
-    const [{ count }] = await tx<{ count: number }[]>`SELECT count(*)::int AS count FROM users`;
-    if (count > 0) return;
+    const [{ count, participant_count: participantCount, host_count: hostCount }] = await tx<{ count: number; participant_count: number; host_count: number }[]>`SELECT count(*)::int AS count, count(*) FILTER (WHERE role='participant')::int AS participant_count, count(*) FILTER (WHERE role='host')::int AS host_count FROM users`;
+    if (participantCount >= 100 && hostCount >= 1) return;
     const hostPassword = process.env.EVENT_HOST_PASSWORD;
     const participantPassword = process.env.EVENT_PARTICIPANT_PASSWORD;
     if (!hostPassword || hostPassword.length < 12 || !participantPassword || participantPassword.length < 12) throw new Error("Event passwords must each contain at least 12 characters");
     const now = Date.now();
     const names = ["Arjun Mehta","Priya Nair","Rahul Sen","Meera Iyer","Kabir Shah","Ananya Rao","Dev Patel","Sara Khan","Vikram Das","Nila Kumar"];
     const colleges = ["NIT Trichy","PSG Tech","VIT Chennai","CEG Anna University","SRM IST","MIT Chennai","IIT Madras","SSN College","SASTRA","REC Chennai"];
-    const identities = [{ id: "HOST-01", role: "host", name: "Host Admin", college: "TECHX Madras 26" }, ...names.map((name, i) => ({ id: `CA-${1001 + i}`, role: "participant", name, college: colleges[i] }))];
-    for (const user of identities) {
-      const salt = randomSalt();
-      const hash = await hashPassword(user.role === "host" ? hostPassword : participantPassword, salt);
-      await tx`INSERT INTO users (id, role, name, college, password_hash, password_salt, created_at) VALUES (${user.id}, ${user.role}, ${user.name}, ${user.college}, ${hash}, ${salt}, ${now})`;
-      if (user.role === "participant") await tx`INSERT INTO participants (user_id, last_seen) VALUES (${user.id}, ${now})`;
-    }
+    const hostSalt = randomSalt();
+    const participantSalt = randomSalt();
+    const hostHash = await hashPassword(hostPassword, hostSalt);
+    const participantHash = await hashPassword(participantPassword, participantSalt);
+    const identities = [
+      { id: "HOST-01", role: "host", name: "Host Admin", college: "TECHX Madras 26", password_hash: hostHash, password_salt: hostSalt, created_at: now },
+      ...Array.from({ length: 100 }, (_, i) => ({
+        id: `CA-${1001 + i}`,
+        role: "participant",
+        name: names[i] || `Participant ${1001 + i}`,
+        college: colleges[i] || "Registered College",
+        password_hash: participantHash,
+        password_salt: participantSalt,
+        created_at: now,
+      })),
+    ];
+    await tx`INSERT INTO users ${tx(identities, "id", "role", "name", "college", "password_hash", "password_salt", "created_at")} ON CONFLICT (id) DO NOTHING`;
+    await tx`INSERT INTO participants (user_id, last_seen) SELECT id, ${now} FROM users WHERE role='participant' ON CONFLICT (user_id) DO NOTHING`;
+    if (count > 0) return;
     await tx`INSERT INTO rounds (id, status, duration_seconds, updated_at) VALUES ('round1', 'waiting', 1800, ${now}), ('round2', 'waiting', 7200, ${now})`;
     for (let i = 0; i < 40; i++) {
       const q = baseQuiz[i % baseQuiz.length];
