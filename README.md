@@ -7,9 +7,70 @@ The recommended event-day architecture is fully local and works without internet
 - Python 3.12 and Java 21 code execute inside isolated, resource-limited Docker containers.
 - Participant browsers connect to the laptop over the venue LAN and never receive database credentials or reach Docker directly.
 
-Cloudflare, Supabase, Vercel, EC2, Judge0, and internet access are not required for the local event.
+## Quick Start: How to Run the Platform & Share with Participants
 
-## Offline laptop deployment
+### Part 1: How to Run the Platform
+
+You have **two main ways** to run this platform:
+
+#### Option A: Cloud Hosting (Recommended for Online Events)
+Deploy the web app for free on **Vercel** and use **Supabase** for the database:
+
+1. **Database Setup (Supabase)**:
+   - Go to [Supabase](https://supabase.com/), create a free project, and copy your Database Connection String (`SUPABASE_DATABASE_URL`).
+   - Run database migrations locally or via terminal:
+     ```bash
+     npm run db:migrate
+     ```
+
+2. **Web App Deployment (Vercel)**:
+   - Go to [Vercel](https://vercel.com/) and click **"Add New" ➔ "Project"**.
+   - Import your GitHub repo: `Shivani-Ananya/code-nomics-techX-26`.
+   - In **Environment Variables**, add:
+     - `SUPABASE_DATABASE_URL`: Your Supabase database pooler URL.
+     - `SUPABASE_DB_SSL`: `true`
+     - `DATABASE_POOL_SIZE`: `5`
+     - `SESSION_SECRET`: A random secret string (at least 32 characters).
+     - `EVENT_HOST_PASSWORD`: Your secret admin host password.
+     - `JUDGE_QUEUE_ENABLED`: `true`
+   - Click **Deploy**. Vercel will give you a live URL (e.g. `https://your-app.vercel.app`).
+
+#### Option B: Offline Local LAN Deployment (For In-Person Events)
+If you are hosting an offline event at a venue without reliable internet:
+
+1. Open PowerShell in the project directory on your host laptop and run:
+   ```powershell
+   .\prepare-offline.ps1
+   ```
+2. On event day, start the event:
+   ```powershell
+   .\start-event.ps1
+   ```
+3. The script will start Docker containers (Next.js web app, Postgres DB, and Code Judge Worker) and display your laptop's LAN IP address (e.g., `http://192.168.1.15:3000`).
+
+---
+
+### Part 2: How to Give It to Participants
+
+1. **Share the Link / URL**:
+   - **For Cloud**: Share your Vercel deployment URL (e.g. `https://your-app.vercel.app`).
+   - **For Local LAN**: Connect all participant laptops to the same Wi-Fi/router and share your host IP (e.g. `http://192.168.1.X:3000`).
+
+2. **Login & Account Distribution**:
+   - Log into the app as Host (`HOST-01`) using your `EVENT_HOST_PASSWORD`.
+   - Go to the **Host Control Room / Dashboard**.
+   - **Create Teams**: You can add team names individually or paste a list of team names in bulk.
+   - **Credentials**: The team name acts as both the **Username** and initial **Password** for that participant!
+     - *Example:* If you create a team called `TechTitans`, the login credentials for that team are:
+       - **Username**: `TechTitans`
+       - **Password**: `TechTitans`
+   - Hand out the assigned team names to each team/participant group.
+
+---
+
+## Architecture Overview
+
+The event platform supports both fully local offline operation and cloud serverless architecture:
 
 Requirements: Windows 10/11, Docker Desktop with Linux containers, Node.js 22, and at least 8 GB RAM (16 GB recommended for 100+ participants).
 
