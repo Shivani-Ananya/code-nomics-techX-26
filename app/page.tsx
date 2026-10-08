@@ -24,6 +24,7 @@ import {
   Trophy,
   Users,
   LogOut,
+  Maximize2,
 } from "lucide-react";
 
 type EventState = {
@@ -35,15 +36,39 @@ type EventState = {
   answers?: { questionId: number; answerIndex: number }[];
   problems?: any[];
   purchases?: any[];
+  questionScores?: {
+    questionId: number;
+    bestPassedCount: number;
+    totalTests: number;
+    pointsAwarded: number;
+  }[];
   latestSubmission?: {
+    questionId: number;
     status: "queued" | "running" | "completed" | "failed";
     passedCount: number;
+    processedTests?: number;
     verdict: string;
     lastError?: string;
     createdAt: number;
     completedAt?: number;
     totalTests?: number;
+    pointsAwarded?: number;
   } | null;
+  latestRun?: {
+    questionId: number;
+    status: "queued" | "running" | "completed" | "failed";
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    elapsedMs: number;
+    timedOut: boolean;
+    samplePassed: boolean;
+    executionOk: boolean;
+    expectedOutput: string;
+    lastError?: string;
+  } | null;
+  totalQueued?: number;
+  myQueuePosition?: number | null;
   questionCount?: number;
   judgeConfigured?: boolean;
   serverTime: number;
@@ -162,6 +187,45 @@ function useConfirmDialog() {
   ) : null;
   return { ask, popup };
 }
+
+function FullscreenPrompt({ round }: { round: "round1" | "round2" }) {
+  const storageKey = `techx-fullscreen-choice-${round}`;
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    setVisible(sessionStorage.getItem(storageKey) !== "done");
+  }, [storageKey]);
+  const finish = () => {
+    sessionStorage.setItem(storageKey, "done");
+    setVisible(false);
+  };
+  const enter = async () => {
+    try {
+      await document.documentElement.requestFullscreen();
+    } finally {
+      finish();
+    }
+  };
+  if (!visible) return null;
+  return (
+    <div className="overlay fullscreen-gate">
+      <section className="confirm-card">
+        <Pill>EVENT DISPLAY</Pill>
+        <Maximize2 size={34} />
+        <h2>Enter fullscreen mode</h2>
+        <p>
+          Fullscreen improves focus during the event. You may still leave
+          fullscreen or switch browser tabs whenever needed.
+        </p>
+        <footer>
+          <button onClick={finish}>CONTINUE WINDOWED</button>
+          <button className="primary" onClick={enter}>
+            ENTER FULLSCREEN
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
 function Top({ state, label }: { state: EventState; label: string }) {
   const user = state.participant;
   const time = label.includes("QUIZ")
@@ -217,10 +281,28 @@ export default function Home() {
     const participantIsActive =
       sessionRole === "participant" &&
       (round1Status === "active" || round2Status === "active");
-    const delay = sessionRole === "host" || participantIsActive ? 2000 : 5000;
+    const submissionStatus = state?.latestSubmission?.status;
+    const runStatus = state?.latestRun?.status;
+    const isJudging =
+      submissionStatus === "queued" ||
+      submissionStatus === "running" ||
+      runStatus === "queued" ||
+      runStatus === "running";
+    const delay = isJudging
+      ? 1200
+      : sessionRole === "host" || participantIsActive
+        ? 2000
+        : 5000;
     const timer = setInterval(refresh, delay);
     return () => clearInterval(timer);
-  }, [refresh, sessionRole, round1Status, round2Status]);
+  }, [
+    refresh,
+    sessionRole,
+    round1Status,
+    round2Status,
+    state?.latestSubmission?.status,
+    state?.latestRun?.status,
+  ]);
 
   const login = async () => {
     setLoading(true);
@@ -344,13 +426,13 @@ export default function Home() {
               onClick={login}
             >
               {loading
-                ? "AUTHENTICATING…"
+                ? "AUTHENTICATINGâ€¦"
                 : role === "host"
                   ? "OPEN CONTROL ROOM"
                   : "JOIN EVENT"}
             </button>
             <small className="secure">
-              <Lock /> Signed HttpOnly session · Server-authorized actions
+              <Lock /> Signed HttpOnly session Â· Server-authorized actions
             </small>
           </div>
         </section>
@@ -380,16 +462,11 @@ export default function Home() {
     return <Quiz state={state} setState={setState} setError={setError} />;
   if (p.quizSubmittedAt && r2.status === "active" && !p.language)
     return <Language state={state} setState={setState} setError={setError} />;
-  if (
-    p.quizSubmittedAt &&
-    r2.status === "active" &&
-    p.language &&
-    p.currentQuestion > (state.questionCount || 0)
-  )
+  if (p.quizSubmittedAt && r2.status === "active" && p.codingSubmittedAt)
     return (
       <StatusScreen
-        title="Coding round completed"
-        text="You have solved every available coding question. New questions added by the host will appear automatically."
+        title="Coding round submitted"
+        text="Your best partial and full-test scores are saved. Wait for the host to end and publish the event."
       />
     );
   if (p.quizSubmittedAt && r2.status === "active" && p.language)
@@ -516,6 +593,7 @@ function Quiz({
   }, [state.rounds.round1?.remainingSeconds, setError, setState]);
   return (
     <div className="app">
+      <FullscreenPrompt round="round1" />
       <Top state={state} label="ROUND 1 / QUIZ" />
       <main className="quiz">
         <section className="question">
@@ -611,6 +689,7 @@ function Language({
   };
   return (
     <div className="language">
+      <FullscreenPrompt round="round2" />
       <Logo />
       <Pill>ROUND 2 IS LIVE</Pill>
       <h1>Choose your language</h1>
@@ -648,20 +727,35 @@ function Coding({
   setError: (s: string) => void;
 }) {
   const p = state.participant;
-  const [question, setQuestion] = useState(Math.max(0, p.currentQuestion - 1));
-  const [source, setSource] = useState(
+  const problems = state.problems || [];
+  const [question, setQuestion] = useState(0);
+  const starter =
     p.language === "Python"
       ? "def solve():\n    # Write your solution\n    pass\n\nif __name__ == '__main__':\n    solve()\n"
-      : "import java.util.*;\npublic class Main {\n  public static void main(String[] args) {\n    // Write your solution\n  }\n}\n",
-  );
+      : "import java.util.*;\npublic class Main {\n  public static void main(String[] args) {\n    // Write your solution\n  }\n}\n";
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [output, setOutput] = useState(
     state.judgeConfigured
-      ? "Judge queue is ready."
+      ? "Judge queue is ready. Click RUN to test with sample input, or SUBMIT to judge all hidden tests."
       : "Judge queue is disabled. Ask the host to enable it.",
   );
+  const [runOutput, setRunOutput] = useState("");
   const [market, setMarket] = useState(false);
   const { ask, popup } = useConfirmDialog();
-  const problem = state.problems![question];
+  const problem = problems[question];
+  const source = drafts[problem.id] ?? starter;
+  const activeRun = state.latestRun;
+  const activeSubmission = state.latestSubmission;
+  const isBusy =
+    activeRun?.status === "queued" ||
+    activeRun?.status === "running" ||
+    activeSubmission?.status === "queued" ||
+    activeSubmission?.status === "running";
+  const score = (state.questionScores || []).find(
+    (item) => item.questionId === problem.id,
+  );
+  const setSource = (value: string) =>
+    setDrafts((current) => ({ ...current, [problem.id]: value }));
   const buy = async (kind: string) => {
     if (
       !(await ask(
@@ -671,29 +765,104 @@ function Coding({
     )
       return;
     try {
-      setState(await request({ action: "purchase-help", kind }));
+      setState(
+        await request({
+          action: "purchase-help",
+          kind,
+          questionId: problem.id,
+        }),
+      );
       setMarket(false);
     } catch (e) {
       setError((e as Error).message);
     }
   };
+  const runCode = async () => {
+    if (isBusy) return;
+    setRunOutput("QUEUED — Your sample run is waiting for a sandbox worker...");
+    try {
+      const data = await request({
+        action: "run-sample",
+        source,
+        questionId: problem.id,
+      });
+      if (data.state) setState(data.state);
+    } catch (e) {
+      setRunOutput("Run failed: " + (e as Error).message);
+    }
+  };
+  useEffect(() => {
+    const run = state.latestRun;
+    if (!run || run.questionId !== problem.id) return;
+    if (run.status === "queued") {
+      setRunOutput(
+        `QUEUED${state.myQueuePosition ? ` — Queue position #${state.myQueuePosition}` : ""}\nWaiting for a sandbox worker...`,
+      );
+    } else if (run.status === "running") {
+      setRunOutput("RUNNING — Executing your code with the sample input...");
+    } else if (run.status === "failed") {
+      setRunOutput(
+        run.lastError ||
+          "The sandbox could not process this run. Please retry.",
+      );
+    } else if (run.timedOut) {
+      setRunOutput(
+        "TIMEOUT — Your code exceeded the time limit on the sample input.",
+      );
+    } else if (run.exitCode !== 0) {
+      let text = `RUNTIME ERROR (exit ${run.exitCode})\n`;
+      if (run.stderr) text += `\nStderr:\n${run.stderr}`;
+      if (run.stdout) text += `\nStdout:\n${run.stdout}`;
+      setRunOutput(text);
+    } else {
+      let text = `${run.samplePassed ? "✓ SAMPLE PASSED" : "✗ SAMPLE OUTPUT DIFFERS"} (${run.elapsedMs}ms)\n\n`;
+      text += `Your output:\n${run.stdout || "(empty)"}\n`;
+      if (run.stderr) text += `\nStderr:\n${run.stderr}\n`;
+      if (!run.samplePassed) text += `\nExpected:\n${run.expectedOutput}`;
+      text += "\n\nYou may now submit this exact code to the hidden tests.";
+      setRunOutput(text);
+    }
+  }, [problem.id, state.latestRun, state.myQueuePosition]);
   useEffect(() => {
     const submission = state.latestSubmission;
-    if (!submission) return;
-    if (submission.status === "queued")
-      setOutput("Submission queued. Waiting for the sandbox worker…");
-    else if (submission.status === "running")
-      setOutput("Sandbox worker is executing the hidden test cases…");
+    if (!submission || submission.questionId !== problem.id) {
+      const saved = (state.questionScores || []).find(
+        (item) => item.questionId === problem.id,
+      );
+      setOutput(
+        saved
+          ? `Best result: ${saved.bestPassedCount}/${saved.totalTests} tests Â· ${saved.pointsAwarded}/${problem.points} points.`
+          : "No execution recorded for this question yet.",
+      );
+      return;
+    }
+    if (submission.status === "queued") {
+      const pos = state.myQueuePosition;
+      const posText = pos ? ` — Queue position #${pos}` : "";
+      setOutput(
+        `QUEUED${posText}\nYour submission is waiting for a sandbox worker...\nTotal in queue: ${state.totalQueued || "?"}`,
+      );
+    } else if (submission.status === "running")
+      setOutput(
+        `RUNNING — Sandbox worker is executing hidden tests...\nPassed so far: ${submission.passedCount || 0}/${submission.processedTests || 0} processed (${submission.totalTests || "?"} total).`,
+      );
     else if (submission.status === "completed")
       setOutput(
-        `Hidden tests passed: ${submission.passedCount}/${submission.totalTests || "?"}${submission.verdict === "accepted" ? "\nPROBLEM SOLVED — next question unlocked." : ""}`,
+        `${submission.verdict === "accepted" ? "✓ ALL TESTS PASSED!" : "✗ PARTIAL / WRONG ANSWER"}\n\nTests passed: ${submission.passedCount}/${submission.totalTests || "?"}\nScore earned: ${submission.pointsAwarded || 0} / ${problem.points} pts${submission.verdict !== "accepted" ? "\n\nPartial marks are saved if this improves your best result." : ""}`,
       );
     else
       setOutput(
         submission.lastError ||
           "The judge could not process this submission. You may retry.",
       );
-  }, [state.latestSubmission]);
+  }, [
+    problem.id,
+    problem.points,
+    state.latestSubmission,
+    state.myQueuePosition,
+    state.questionScores,
+    state.totalQueued,
+  ]);
   const submit = async () => {
     if (
       !(await ask(
@@ -702,43 +871,60 @@ function Coding({
       ))
     )
       return;
-    setOutput("Adding submission to the secure judge queue…");
+    setOutput("Adding submission to the secure judge queue...");
     try {
-      const data = await request({ action: "submit-code", source });
-      setOutput("Submission queued. Waiting for the sandbox worker…");
+      const data = await request({
+        action: "submit-code",
+        source,
+        questionId: problem.id,
+      });
+      setOutput("Submission queued. Waiting for the sandbox worker...");
       if (data.state) setState(data.state);
     } catch (e) {
       setOutput((e as Error).message);
     }
   };
+  const finish = async () => {
+    if (
+      !(await ask(
+        "Turn in the coding round? You must have executed at least one judged submission for every question. You cannot submit more code afterward.",
+        "Turn in coding round?",
+      ))
+    )
+      return;
+    try {
+      setState(await request({ action: "finish-coding" }));
+      setError("");
+    } catch (error) {
+      setError((error as Error).message);
+    }
+  };
   return (
     <div className="ide">
+      <FullscreenPrompt round="round2" />
       <Top state={state} label="ROUND 2 / CODING" />
       <div className="problemtabs">
         <div>
-          {state.problems!.map((item, index) => (
-            <button
-              disabled={index >= p.currentQuestion}
-              className={
-                index === question
-                  ? "active"
-                  : index < p.currentQuestion - 1
-                    ? "done"
-                    : ""
-              }
-              onClick={() => setQuestion(index)}
-              key={item.id}
-            >
-              {index < p.currentQuestion - 1 ? (
-                <Check />
-              ) : index >= p.currentQuestion ? (
-                <Lock />
-              ) : (
-                "Q" + (index + 1)
-              )}
-              <small>{item.difficulty}</small>
-            </button>
-          ))}
+          {problems.map((item, index) => {
+            const itemScore = (state.questionScores || []).find(
+              (entry) => entry.questionId === item.id,
+            );
+            const passedAll =
+              itemScore && itemScore.bestPassedCount === itemScore.totalTests;
+            return (
+              <button
+                className={
+                  index === question ? "active" : passedAll ? "done" : ""
+                }
+                onClick={() => setQuestion(index)}
+                key={item.id}
+              >
+                {passedAll ? <Check /> : "Q" + (index + 1)}
+                <small>{item.difficulty}</small>
+                {itemScore && <small>{itemScore.pointsAwarded} pts</small>}
+              </button>
+            );
+          })}
         </div>
         <aside>
           <span>
@@ -751,6 +937,9 @@ function Coding({
           <button onClick={() => setMarket(true)}>
             <ShoppingCart /> HELP MARKETPLACE
           </button>
+          <button className="turn-in" onClick={finish}>
+            TURN IN ROUND
+          </button>
         </aside>
       </div>
       <main className="workspace">
@@ -761,6 +950,12 @@ function Coding({
               {problem.difficulty}
             </Pill>
             <b>{problem.points} PTS</b>
+            {score && (
+              <b className="partial-score">
+                BEST {score.bestPassedCount}/{score.totalTests} Â·{" "}
+                {score.pointsAwarded} PTS
+              </b>
+            )}
           </div>
           <h2>{problem.title}</h2>
           <p>{problem.statement}</p>
@@ -809,23 +1004,81 @@ function Coding({
             onChange={setSource}
           />
           <div className="console">
-            <b>SERVER CONSOLE</b>
-            <pre>{output}</pre>
+            <div className="console-tabs">
+              <b>▶ RUN OUTPUT</b>
+              <b className="console-sep">|</b>
+              <b>⬆ JUDGE RESULT</b>
+            </div>
+            {runOutput && (
+              <pre
+                className={
+                  "run-out" +
+                  (runOutput.includes("✓")
+                    ? " pass"
+                    : runOutput.includes("✗") ||
+                        runOutput.includes("ERROR") ||
+                        runOutput.includes("TIMEOUT")
+                      ? " fail"
+                      : "")
+                }
+              >
+                {runOutput}
+              </pre>
+            )}
+            <pre
+              className={
+                "judge-out" +
+                (output.includes("✓")
+                  ? " pass"
+                  : output.includes("✗")
+                    ? " fail"
+                    : output.includes("QUEUED") || output.includes("RUNNING")
+                      ? " pending"
+                      : "")
+              }
+            >
+              {output}
+            </pre>
           </div>
           <footer>
             <button
-              onClick={() =>
-                setOutput("Sample output expected: " + problem.sampleOutput)
-              }
+              disabled={question === 0}
+              onClick={() => setQuestion((current) => Math.max(0, current - 1))}
+            >
+              PREVIOUS QUESTION
+            </button>
+            <button
+              onClick={() => {
+                setRunOutput("");
+                setOutput("Sample output expected: " + problem.sampleOutput);
+              }}
             >
               CHECK SAMPLE
             </button>
             <button
+              className="run"
+              disabled={!state.judgeConfigured || isBusy}
+              onClick={runCode}
+              title="Run your code against the sample input only (does not affect score)"
+            >
+              {isBusy ? "BUSY..." : "▶ RUN"}
+            </button>
+            <button
               className="submit"
-              disabled={!state.judgeConfigured}
+              disabled={!state.judgeConfigured || isBusy}
               onClick={submit}
             >
-              SUBMIT TO JUDGE
+              ⬆ SUBMIT TO JUDGE
+            </button>
+            <button
+              disabled={question === problems.length - 1}
+              onClick={() =>
+                setQuestion((current) =>
+                  Math.min(problems.length - 1, current + 1),
+                )
+              }
+            >
+              NEXT QUESTION
             </button>
           </footer>
         </section>
@@ -835,36 +1088,110 @@ function Coding({
           <div className="market" onClick={(e) => e.stopPropagation()}>
             <header>
               <h2>
-                <ShoppingCart /> Help marketplace
+                <ShoppingCart /> Help Marketplace
               </h2>
-              <button onClick={() => setMarket(false)}>×</button>
+              <button onClick={() => setMarket(false)}>✕</button>
             </header>
-            <p>Every purchase is validated and logged by the server.</p>
-            {[
-              ["small", "Small hint", 200],
-              ["algorithm", "Algorithm hint", 300],
-              ["pseudocode", "Pseudocode / key logic", 450],
-              ["reveal", "50% code reveal", 650],
-              ["ai", "AI assistance · 3 messages", 800],
-            ].map(([kind, name, cost]) => (
-              <button
-                key={kind}
-                disabled={p.helpsUsed >= 3 || p.coins < Number(cost)}
-                onClick={() => buy(String(kind))}
-              >
-                <span>
-                  <b>{name}</b>
-                  <small>Tailored to {p.language}</small>
-                </span>
-                <strong>{cost} COINS</strong>
-              </button>
-            ))}
-            <footer>
-              BALANCE <b>{p.coins}</b>
+            <div className="market-balance">
               <span>
-                HELP USED <b>{p.helpsUsed}/3</b>
+                Balance: <b className="gold">{p.coins} COINS</b>
               </span>
-            </footer>
+              <span>
+                Purchases remaining: <b>{Math.max(0, 3 - p.helpsUsed)}/3</b>
+              </span>
+            </div>
+            <p className="market-note">
+              Every purchase is server-validated, coin-deducted, and
+              question-specific.
+            </p>
+            {(
+              ["small", "algorithm", "pseudocode", "reveal", "ai"] as const
+            ).map((kind) => {
+              const meta: Record<string, [string, number, string]> = {
+                small: ["💡 Small Hint", 200, "A targeted tip to get unstuck"],
+                algorithm: [
+                  "🧠 Algorithm Hint",
+                  300,
+                  "Core algorithm insight for this problem",
+                ],
+                pseudocode: [
+                  "📋 Pseudocode + Logic",
+                  450,
+                  "Step-by-step solution structure",
+                ],
+                reveal: [
+                  "🔓 50% Code Reveal",
+                  650,
+                  "Starter template with key steps filled in",
+                ],
+                ai: [
+                  "🤖 AI Walkthrough",
+                  800,
+                  "3-message guided AI explanation",
+                ],
+              };
+              const [name, cost, desc] = meta[kind];
+              const alreadyBought = (state.purchases || []).some(
+                (pu: any) => pu.questionId === problem.id && pu.kind === kind,
+              );
+              const purchase = (state.purchases || []).find(
+                (pu: any) => pu.questionId === problem.id && pu.kind === kind,
+              );
+              return (
+                <div
+                  key={kind}
+                  className={"market-item" + (alreadyBought ? " bought" : "")}
+                >
+                  <span>
+                    <b>{name}</b>
+                    <small>{desc}</small>
+                  </span>
+                  <span className="market-item-right">
+                    <strong>{cost} COINS</strong>
+                    {alreadyBought ? (
+                      <button
+                        className="view-btn"
+                        onClick={() => {
+                          setRunOutput(
+                            "── PURCHASED HELP ──\n" + purchase.content,
+                          );
+                          setMarket(false);
+                        }}
+                      >
+                        VIEW
+                      </button>
+                    ) : (
+                      <button
+                        disabled={p.helpsUsed >= 3 || p.coins < cost}
+                        onClick={() => buy(kind)}
+                        className="buy-btn"
+                      >
+                        BUY
+                      </button>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+            <div className="market-purchases">
+              {(state.purchases || []).filter(
+                (pu: any) => pu.questionId === problem.id,
+              ).length > 0 && (
+                <div className="purchased-list">
+                  <h4>PURCHASED FOR THIS QUESTION</h4>
+                  {(state.purchases || [])
+                    .filter((pu: any) => pu.questionId === problem.id)
+                    .map((pu: any) => (
+                      <div key={pu.id} className="purchase-card">
+                        <b>
+                          {pu.kind.toUpperCase()} — {pu.cost} coins
+                        </b>
+                        <pre>{pu.content}</pre>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -937,7 +1264,7 @@ function TeamManager({
           </button>
         </div>
         <label>
-          BULK TEAM NAMES — ONE PER LINE
+          BULK TEAM NAMES â€” ONE PER LINE
           <textarea
             value={bulkTeams}
             onChange={(event) => setBulkTeams(event.target.value)}
@@ -959,8 +1286,8 @@ function TeamManager({
             <b>CREATED CREDENTIALS</b>
             {created.map((team) => (
               <code key={team.id}>
-                username: {team.name} · password: {team.password} · internal ID:{" "}
-                {team.id}
+                username: {team.name} Â· password: {team.password} Â· internal
+                ID: {team.id}
               </code>
             ))}
           </div>
@@ -1090,7 +1417,7 @@ function QuestionManager({
         <textarea
           value={question.hints}
           onChange={(event) => update("hints", event.target.value)}
-          placeholder="Hints — one per line"
+          placeholder="Hints â€” one per line"
         />
         <textarea
           value={question.tests}
@@ -1156,8 +1483,12 @@ function Host({
       action === "start" &&
       roundState?.status !== "waiting" &&
       !(await ask(
-        `This will restart the ${round === "round1" ? "Round 1" : "Round 2"} server timer from the beginning. Existing answers and scores will be preserved.`,
-        `Restart ${round === "round1" ? "Round 1" : "Round 2"} timer?`,
+        round === "round1"
+          ? "This starts a new event run. Team accounts and questions are kept, but all previous answers, submissions, scores, purchases and published results are cleared."
+          : "This restarts the Round 2 server timer. Existing attempts and best scores are preserved.",
+        round === "round1"
+          ? "Reset and start Round 1?"
+          : "Restart Round 2 timer?",
       ))
     )
       return;
@@ -1462,7 +1793,7 @@ function Host({
                       <small>{x.id}</small>
                     </td>
                     <td>
-                      <code>{x.language || "—"}</code>
+                      <code>{x.language || "â€”"}</code>
                     </td>
                     <td>
                       <progress
@@ -1498,11 +1829,11 @@ function Host({
           </section>
           <aside className="detail">
             <header>
-              <b>{String(person.name || "—").slice(0, 2)}</b>
+              <b>{String(person.name || "â€”").slice(0, 2)}</b>
               <span>
                 <h3>{person.name}</h3>
                 <small>
-                  {person.id} · {person.college}
+                  {person.id} Â· {person.college}
                 </small>
               </span>
             </header>

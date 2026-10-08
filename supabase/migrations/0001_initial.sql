@@ -35,6 +35,7 @@ CREATE TABLE participants (
   solved integer NOT NULL DEFAULT 0,
   helps_used integer NOT NULL DEFAULT 0,
   completion_time bigint,
+  coding_submitted_at bigint,
   status text NOT NULL DEFAULT 'waiting',
   last_seen bigint NOT NULL
 );
@@ -101,6 +102,7 @@ CREATE TABLE submission_jobs (
   question_id integer NOT NULL REFERENCES coding_questions(id),
   language text NOT NULL CHECK (language IN ('Python', 'Java')),
   source text NOT NULL,
+  mode text NOT NULL DEFAULT 'submit' CHECK (mode IN ('run', 'submit')),
   status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'completed', 'failed')),
   attempts integer NOT NULL DEFAULT 0,
   locked_at timestamptz,
@@ -118,6 +120,16 @@ CREATE TABLE solved_problems (
   question_id integer NOT NULL REFERENCES coding_questions(id),
   solved_at bigint NOT NULL,
   points_awarded integer NOT NULL,
+  PRIMARY KEY (participant_id, question_id)
+);
+
+CREATE TABLE coding_question_scores (
+  participant_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  question_id integer NOT NULL REFERENCES coding_questions(id) ON DELETE CASCADE,
+  best_passed_count integer NOT NULL DEFAULT 0,
+  total_tests integer NOT NULL,
+  points_awarded integer NOT NULL DEFAULT 0,
+  updated_at bigint NOT NULL,
   PRIMARY KEY (participant_id, question_id)
 );
 
@@ -176,6 +188,7 @@ ALTER TABLE test_cases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE submissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE submission_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE solved_problems ENABLE ROW LEVEL SECURITY;
+ALTER TABLE coding_question_scores ENABLE ROW LEVEL SECURITY;
 ALTER TABLE help_purchases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE coin_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE login_rate_limits ENABLE ROW LEVEL SECURITY;

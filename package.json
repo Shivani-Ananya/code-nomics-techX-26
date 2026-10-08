@@ -14,7 +14,10 @@
     "password:set": "node --env-file-if-exists=.env.local scripts/set-password.mjs",
     "worker:dev": "tsx worker/src/index.ts",
     "worker:build": "tsc -p worker/tsconfig.json",
-    "worker:start": "node worker/dist/index.js"
+    "worker:start": "node --env-file-if-exists=.env.local worker/dist/index.js",
+    "db:local": "node --env-file-if-exists=.env.local scripts/migrate.mjs",
+    "start:prod": "next start --hostname 0.0.0.0 --port 3000",
+    "dev:all": "next dev --hostname 0.0.0.0 --port 3000"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -34,7 +37,7 @@
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
     "lucide-react": "^1.31.0",
-    "next": "16.3.4",
+    "next": "^16.4.0",
     "next-themes": "^0.4.6",
     "postgres": "^3.4.7",
     "radix-ui": "^1.6.7",

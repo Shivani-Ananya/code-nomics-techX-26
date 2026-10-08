@@ -40,6 +40,9 @@ next-env.d.ts
 /dist/
 /worker/dist/
 /worker-data/
+/.env.offline
+/offline-credentials.txt
+/tsconfig.tsbuildinfo
 # Legacy preview caches may still exist in older checkouts; never commit them.
 /.vinext/
 /.wrangler/

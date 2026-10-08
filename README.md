@@ -1,17 +1,45 @@
 # TECHX Madras 26 Code Auction
 
-Production architecture for the live code-auction event:
+The recommended event-day architecture is fully local and works without internet:
 
-- Next.js runs the UI and authenticated API on Vercel.
-- Supabase Postgres is the authoritative store for accounts, rounds, scores, submissions, audit records, and the durable judge queue.
-- One EC2 worker atomically claims queued submissions and executes Python 3.12 or Java 21 inside restricted Docker containers.
-- Participant browsers only talk to Next.js. They never receive database credentials or reach the executor directly.
+- Docker runs Next.js, PostgreSQL, and a four-slot judge worker on the host laptop.
+- PostgreSQL stores accounts, rounds, scores, submissions, and the durable Run/Submit queue.
+- Python 3.12 and Java 21 code execute inside isolated, resource-limited Docker containers.
+- Participant browsers connect to the laptop over the venue LAN and never receive database credentials or reach Docker directly.
 
-Cloudflare, Vinext, D1, Wrangler, and Judge0 are not used.
+Cloudflare, Supabase, Vercel, EC2, Judge0, and internet access are not required for the local event.
+
+## Offline laptop deployment
+
+Requirements: Windows 10/11, Docker Desktop with Linux containers, Node.js 22, and at least 8 GB RAM (16 GB recommended for 100+ participants).
+
+While internet is available, run this once from PowerShell:
+
+```powershell
+.\prepare-offline.ps1
+```
+
+This downloads PostgreSQL, Python, and Java, builds the two application images, generates strong local secrets, and writes the host login to `offline-credentials.txt`. After it completes, disconnecting the internet is safe.
+
+On event day:
+
+```powershell
+.\start-event.ps1
+```
+
+The host opens `http://localhost:3000`. The script also prints the LAN address participants should open. Allow inbound TCP port 3000 in Windows Firewall on the private venue network. Stop the services without deleting event data using `.\stop-event.ps1`; view health and recent logs with `.\status-event.ps1`.
+
+PostgreSQL persists in a named Docker volume. `docker compose down` preserves it; adding `-v` deletes all event data and should only be used for an intentional full reset.
+
+### Coding workflow and capacity
+
+Run and Submit both use the durable PostgreSQL queue; web requests never start compilers directly. Four fixed worker slots prevent a rush of 100+ participants from spawning unlimited processes. Each execution has CPU, memory, process, network, output, and time limits.
+
+Participants first choose **Run**. The console displays real stdout, stderr, timeout, exit status, and sample comparison. A scored **Submit** is accepted only after that exact source code has run successfully. During hidden judging, the UI shows how many tests have passed and how many have been processed. Partial points are stored as the best score for each question, so retries cannot reduce a score or farm duplicate points.
 
 ## Local web app
 
-Requirements: Node.js 22 and a Supabase project.
+For source development without the full Docker stack, use Node.js 22 and PostgreSQL.
 
 ```bash
 npm ci
@@ -20,7 +48,7 @@ npm run db:migrate
 npm run dev
 ```
 
-The development URL is `http://127.0.0.1:5173`. A normal production `next start` uses port 3000 unless `PORT` is set.
+The development URL is `http://127.0.0.1:5173`. The offline Docker site uses port 3000 and local PostgreSQL uses loopback port 5433.
 
 The first authenticated request creates only the `HOST-01` account and the default question bank. Participant teams are created by the host from the control room, individually or in bulk. Participants use their team name as both the login username and initial password. Internal IDs begin at `CA-1001` and are retained only for scoring and database relationships.
 

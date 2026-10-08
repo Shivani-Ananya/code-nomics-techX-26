@@ -1,7 +1,9 @@
-.git
-.next
 node_modules
-worker/dist
-worker-data
-.env*
-npm-debug.log*
+.next
+dist
+build
+.git
+.env
+.env.*
+.wrangler
+.dev.vars

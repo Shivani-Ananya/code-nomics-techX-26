@@ -82,6 +82,9 @@ async function snapshot(request: Request) {
   const [{ questionCount }] = await database<
     { questionCount: number }[]
   >`SELECT count(*)::int AS "questionCount" FROM coding_questions`;
+  const [{ totalQueued }] = await database<
+    { totalQueued: number }[]
+  >`SELECT count(*)::int AS "totalQueued" FROM submission_jobs WHERE status IN ('queued','running')`;
   if (session.role === "host")
     return json({
       session,
@@ -90,11 +93,11 @@ async function snapshot(request: Request) {
       questionCount,
       serverTime: Date.now(),
       judgeConfigured: queueEnabled(),
+      totalQueued,
     });
-
   await database`UPDATE participants SET last_seen=${Date.now()}, status=CASE WHEN status='waiting' THEN status ELSE 'online' END WHERE user_id=${session.id}`;
   const [participant] =
-    await database`SELECT u.id, u.name, u.college, u.locked, u.disqualified, p.quiz_submitted_at::float8 AS "quizSubmittedAt", p.quiz_correct AS "quizCorrect", p.coins, p.coding_score AS "codingScore", p.language, p.current_question AS "currentQuestion", p.solved, p.helps_used AS "helpsUsed", p.completion_time::float8 AS "completionTime", p.status, p.last_seen::float8 AS "lastSeen" FROM users u JOIN participants p ON p.user_id=u.id WHERE u.id=${session.id}`;
+    await database`SELECT u.id, u.name, u.college, u.locked, u.disqualified, p.quiz_submitted_at::float8 AS "quizSubmittedAt", p.quiz_correct AS "quizCorrect", p.coins, p.coding_score AS "codingScore", p.language, p.current_question AS "currentQuestion", p.solved, p.helps_used AS "helpsUsed", p.completion_time::float8 AS "completionTime", p.coding_submitted_at::float8 AS "codingSubmittedAt", p.status, p.last_seen::float8 AS "lastSeen" FROM users u JOIN participants p ON p.user_id=u.id WHERE u.id=${session.id}`;
   const quiz =
     await database`SELECT id, category, difficulty, prompt, options_json AS options, coin_value AS "coinValue" FROM quiz_questions ORDER BY id`;
   const answers =
@@ -103,8 +106,19 @@ async function snapshot(request: Request) {
     await database`SELECT id, title, difficulty, points, statement, input_format AS "inputFormat", output_format AS "outputFormat", sample_input AS "sampleInput", sample_output AS "sampleOutput" FROM coding_questions ORDER BY id`;
   const purchases =
     await database`SELECT id, question_id AS "questionId", kind, cost, content, created_at::float8 AS "createdAt" FROM help_purchases WHERE participant_id=${session.id} ORDER BY created_at`;
+  const questionScores =
+    await database`SELECT question_id AS "questionId", best_passed_count AS "bestPassedCount", total_tests AS "totalTests", points_awarded AS "pointsAwarded" FROM coding_question_scores WHERE participant_id=${session.id} ORDER BY question_id`;
   const [latestSubmission] =
-    await database`SELECT j.id, j.status, s.passed_count AS "passedCount", s.verdict, j.last_error AS "lastError", COALESCE((j.result_json->>'total')::int, (SELECT count(*)::int FROM test_cases WHERE question_id=j.question_id)) AS "totalTests", EXTRACT(EPOCH FROM j.created_at)*1000 AS "createdAt", s.completed_at::float8 AS "completedAt" FROM submission_jobs j JOIN submissions s ON s.id=j.submission_id WHERE j.participant_id=${session.id} ORDER BY j.created_at DESC LIMIT 1`;
+    await database`SELECT j.id, j.question_id AS "questionId", j.status, COALESCE((j.result_json->>'passed')::int, s.passed_count) AS "passedCount", COALESCE((j.result_json->>'processed')::int, CASE WHEN j.status='completed' THEN (j.result_json->>'total')::int ELSE 0 END, 0) AS "processedTests", s.verdict, j.last_error AS "lastError", COALESCE((j.result_json->>'total')::int, (SELECT count(*)::int FROM test_cases WHERE question_id=j.question_id)) AS "totalTests", COALESCE((j.result_json->>'score')::int, 0) AS "pointsAwarded", EXTRACT(EPOCH FROM j.created_at)*1000 AS "createdAt", s.completed_at::float8 AS "completedAt" FROM submission_jobs j JOIN submissions s ON s.id=j.submission_id WHERE j.participant_id=${session.id} AND j.mode='submit' ORDER BY j.created_at DESC LIMIT 1`;
+  const [latestRun] =
+    await database`SELECT j.id, j.question_id AS "questionId", j.status, j.last_error AS "lastError", COALESCE(j.result_json->>'stdout', '') AS stdout, COALESCE(j.result_json->>'stderr', '') AS stderr, COALESCE((j.result_json->>'exitCode')::int, 0) AS "exitCode", COALESCE((j.result_json->>'elapsedMs')::int, 0) AS "elapsedMs", COALESCE((j.result_json->>'timedOut')::boolean, false) AS "timedOut", COALESCE((j.result_json->>'samplePassed')::boolean, false) AS "samplePassed", COALESCE((j.result_json->>'executionOk')::boolean, false) AS "executionOk", COALESCE(j.result_json->>'expectedOutput', '') AS "expectedOutput", EXTRACT(EPOCH FROM j.created_at)*1000 AS "createdAt" FROM submission_jobs j WHERE j.participant_id=${session.id} AND j.mode='run' ORDER BY j.created_at DESC LIMIT 1`;
+  const [myQueueRow] = await database<{ position: number }[]>`
+    SELECT (count(*) + 1)::int AS position FROM submission_jobs
+    WHERE status='queued' AND created_at < (
+      SELECT created_at FROM submission_jobs
+      WHERE status='queued' AND participant_id=${session.id}
+      ORDER BY created_at LIMIT 1
+    )`;
   return json({
     session,
     participant,
@@ -115,9 +129,13 @@ async function snapshot(request: Request) {
     answers,
     problems,
     purchases,
+    questionScores,
     latestSubmission: latestSubmission || null,
+    latestRun: latestRun || null,
     serverTime: Date.now(),
     judgeConfigured: queueEnabled(),
+    totalQueued,
+    myQueuePosition: myQueueRow?.position ?? null,
   });
 }
 
@@ -133,7 +151,6 @@ async function requireRole(request: Request, role?: "host" | "participant") {
     ? session
     : null;
 }
-
 async function login(request: Request, body: Body) {
   await ensureSeeded();
   const loginName = String(body.id || "").trim();
@@ -144,37 +161,32 @@ async function login(request: Request, body: Body) {
       : loginName.length >= 2 && loginName.length <= 80;
   if (!validLogin || String(body.password || "").length > 256)
     return json({ error: "Invalid credentials or account unavailable" }, 401);
-  const normalizedLogin =
-    role === "host" ? loginName.toUpperCase() : loginName.toLocaleLowerCase();
+  const normalizedLogin = role === "host" ? loginName.toUpperCase() : loginName;
   const key = await loginClientKey(request, normalizedLogin);
+  const database = db();
   const [limit] =
-    await db()`SELECT blocked_until FROM login_rate_limits WHERE client_key=${key}`;
-  if (Number(limit?.blocked_until || 0) > Date.now())
+    await database`SELECT blocked_until FROM login_rate_limits WHERE client_key=${key}`;
+  if (limit?.blocked_until && Number(limit.blocked_until) > Date.now())
     return json(
       { error: "Too many failed attempts. Try again in 15 minutes." },
       429,
-      { "Retry-After": "900" },
     );
   const [user] =
     role === "host"
-      ? await db()`SELECT * FROM users WHERE id=${loginName.toUpperCase()} AND role='host'`
-      : await db()`SELECT * FROM users WHERE lower(name)=lower(${loginName}) AND role='participant' LIMIT 1`;
-  if (
-    !user ||
-    user.locked ||
-    user.disqualified ||
-    !safeEqual(
-      await hashPassword(
-        String(body.password || ""),
-        String(user.password_salt || ""),
-      ),
-      String(user.password_hash || ""),
-    )
-  ) {
-    await recordLoginFailure(key);
+      ? await database`SELECT id, role, password_hash, password_salt, locked, disqualified FROM users WHERE id=${normalizedLogin} AND role='host'`
+      : await database`SELECT id, role, password_hash, password_salt, locked, disqualified FROM users WHERE name=${loginName} AND role='participant'`;
+  const password = String(body.password || "");
+  const expectedHash = user
+    ? await hashPassword(password, String(user.password_salt))
+    : "";
+  const valid = user && safeEqual(expectedHash, String(user.password_hash));
+  if (!valid || !user || user.locked || user.disqualified) {
+    if (user) await recordLoginFailure(key);
     return json({ error: "Invalid credentials or account unavailable" }, 401);
   }
-  await db()`DELETE FROM login_rate_limits WHERE client_key=${key}`;
+  if (role === "participant") {
+    await database`INSERT INTO participants (user_id, last_seen) VALUES (${user.id}, ${Date.now()}) ON CONFLICT DO NOTHING`;
+  }
   const token = await createSession(String(user.id), role);
   const headers = new Headers(request.headers);
   headers.set("cookie", `ca_session=${token}`);
@@ -200,6 +212,20 @@ async function hostAction(request: Request, body: Body) {
   if (!round) return json({ error: "Round not found" }, 404);
   if (action === "start")
     await database.begin(async (tx) => {
+      const restartingEvent =
+        id === "round1" &&
+        (round.status !== "waiting" || Boolean(round.started_at));
+      if (restartingEvent) {
+        await tx`DELETE FROM submissions`;
+        await tx`DELETE FROM quiz_answers`;
+        await tx`DELETE FROM solved_problems`;
+        await tx`DELETE FROM coding_question_scores`;
+        await tx`DELETE FROM help_purchases`;
+        await tx`DELETE FROM coin_transactions`;
+        await tx`DELETE FROM score_adjustments`;
+        await tx`UPDATE participants SET quiz_submitted_at=NULL, quiz_correct=0, coins=0, coding_score=0, language=NULL, current_question=1, solved=0, helps_used=0, completion_time=NULL, coding_submitted_at=NULL, status='waiting', last_seen=${now}`;
+        await tx`UPDATE rounds SET status='waiting', started_at=NULL, paused_at=NULL, accumulated_pause_seconds=0, results_published=false, updated_at=${now}`;
+      }
       await tx`UPDATE rounds SET status='ended', paused_at=NULL, updated_at=${now} WHERE id<>${id} AND status IN ('active','paused')`;
       await tx`UPDATE rounds SET status='active', started_at=${now}, paused_at=NULL, accumulated_pause_seconds=0, results_published=false, updated_at=${now} WHERE id=${id}`;
     });
@@ -215,7 +241,7 @@ async function hostAction(request: Request, body: Body) {
   else if (action === "end" && round.status !== "ended")
     await database`UPDATE rounds SET status='ended', updated_at=${now} WHERE id=${id}`;
   else if (action === "end" && round.status === "ended") {
-    // Ending an already-ended round is harmless and intentionally idempotent.
+    /* idempotent */
   } else if (
     action === "publish" &&
     id === "round2" &&
@@ -278,14 +304,14 @@ async function addTeams(request: Request, body: Body) {
   const names = [
     ...new Map(
       supplied
-        .map((value) => String(value).trim())
+        .map((v) => String(v).trim())
         .filter(Boolean)
-        .map((name) => [name.toLocaleLowerCase(), name]),
+        .map((n) => [n.toLocaleLowerCase(), n]),
     ).values(),
   ];
   if (!names.length || names.length > 200)
     return json({ error: "Enter between 1 and 200 team names" }, 400);
-  if (names.some((name) => name.length < 2 || name.length > 80))
+  if (names.some((n) => n.length < 2 || n.length > 80))
     return json(
       { error: "Every team name must contain between 2 and 80 characters" },
       400,
@@ -298,9 +324,9 @@ async function addTeams(request: Request, body: Body) {
       { id: string; name: string }[]
     >`SELECT id, name FROM users WHERE role='participant'`;
     const existingNames = new Set(
-      existing.map((row) => row.name.toLocaleLowerCase()),
+      existing.map((r) => r.name.toLocaleLowerCase()),
     );
-    const usedIds = new Set(existing.map((row) => Number(row.id.slice(3))));
+    const usedIds = new Set(existing.map((r) => Number(r.id.slice(3))));
     let candidate = 1001;
     for (const name of names) {
       if (existingNames.has(name.toLocaleLowerCase())) continue;
@@ -332,19 +358,7 @@ async function removeAllTeams(request: Request) {
     state: await (await snapshot(request)).json(),
   });
 }
-
-type CodingQuestionInput = {
-  title?: unknown;
-  difficulty?: unknown;
-  points?: unknown;
-  statement?: unknown;
-  inputFormat?: unknown;
-  outputFormat?: unknown;
-  sampleInput?: unknown;
-  sampleOutput?: unknown;
-  hints?: unknown;
-  tests?: unknown;
-};
+type CodingQuestionInput = Record<string, unknown>;
 function validateCodingQuestion(value: CodingQuestionInput) {
   const title = String(value.title || "").trim();
   const difficulty = String(value.difficulty || "").toUpperCase();
@@ -357,17 +371,17 @@ function validateCodingQuestion(value: CodingQuestionInput) {
   const hints = Array.isArray(value.hints)
     ? value.hints
         .map(String)
-        .map((hint) => hint.trim())
+        .map((h) => h.trim())
         .filter(Boolean)
         .slice(0, 10)
     : [];
   const tests = Array.isArray(value.tests)
-    ? value.tests.map((test) =>
-        Array.isArray(test)
-          ? [String(test[0] ?? ""), String(test[1] ?? "")]
+    ? value.tests.map((t) =>
+        Array.isArray(t)
+          ? [String(t[0] ?? ""), String(t[1] ?? "")]
           : [
-              String((test as Row)?.input ?? ""),
-              String((test as Row)?.expectedOutput ?? ""),
+              String((t as Row)?.input ?? ""),
+              String((t as Row)?.expectedOutput ?? ""),
             ],
       )
     : [];
@@ -389,7 +403,7 @@ function validateCodingQuestion(value: CodingQuestionInput) {
     throw new Error(
       "Each question needs input/output formats and 1 to 20 test cases",
     );
-  if (tests.some((test) => test[0].length > 10000 || test[1].length > 10000))
+  if (tests.some((t) => t[0].length > 10000 || t[1].length > 10000))
     throw new Error("A test case is too large");
   return {
     title,
@@ -411,8 +425,8 @@ async function addQuestions(request: Request, body: Body) {
   const supplied = Array.isArray(body.questions) ? body.questions : [];
   if (!supplied.length || supplied.length > 50)
     return json({ error: "Add between 1 and 50 questions at a time" }, 400);
-  const questions = supplied.map((value) =>
-    validateCodingQuestion(value as CodingQuestionInput),
+  const questions = supplied.map((v) =>
+    validateCodingQuestion(v as CodingQuestionInput),
   );
   const database = db();
   const ids: number[] = [];
@@ -535,7 +549,6 @@ async function selectLanguage(request: Request, body: Body) {
     return json({ error: "Language is already locked" }, 409);
   return snapshot(request);
 }
-
 const helpCosts: Record<string, number> = {
   small: 200,
   algorithm: 300,
@@ -543,13 +556,45 @@ const helpCosts: Record<string, number> = {
   reveal: 650,
   ai: 800,
 };
+
+function buildHelpContent(
+  kind: string,
+  hints: string[],
+  title: string,
+  language: string,
+): string {
+  const h0 = hints[0] || "Break the problem into smaller steps.";
+  const h1 =
+    hints[1] || "Think about the most efficient data structure for this task.";
+  const h2 =
+    hints[2] ||
+    "Consider how you would solve this manually, then code that process.";
+  const pyTemplate =
+    "# Read input:\n# line = input()  # or sys.stdin.readline()\n# Process according to the steps above.\n# print(answer)";
+  const javaTemplate =
+    "// Read input:\n// Scanner sc = new Scanner(System.in);\n// Process according to steps above.\n// System.out.println(answer);";
+  if (kind === "small") return `SMALL HINT — "${title}"\n\n${h0}`;
+  if (kind === "algorithm")
+    return `ALGORITHM HINT — "${title}"\n\n${h1}\n\n${h2}`;
+  if (kind === "pseudocode")
+    return `PSEUDOCODE — "${title}" (${language})\n\n${h2}\n\nStep-by-step:\n  1. Read the input as described.\n  2. ${h0}\n  3. ${h1}\n  4. Output the result in the required format.\n\nBonus hint: ${hints[3] || h0}`;
+  if (kind === "reveal")
+    return `50% REVEAL — "${title}" (${language})\n\nSolution breakdown:\n  Step 1: ${h0}\n  Step 2: ${h1}\n  Step 3: ${h2}\n\nCode template:\n${language === "Python" ? pyTemplate : javaTemplate}`;
+  if (kind === "ai")
+    return `AI ASSISTANCE — "${title}" (${language})\n\nMessage 1 — Understand the problem:\n  ${hints.join(" → ") || h0}\n\nMessage 2 — Strategy:\n  ${h2}\n  Edge cases to consider: empty input, all same values, large numbers.\n\nMessage 3 — ${language} starter template:\n${language === "Python" ? `  import sys\n  def solve():\n      # ${h0}\n      pass\n  solve()` : `  import java.util.*;\n  public class Main {\n    public static void main(String[] args) {\n      Scanner sc = new Scanner(System.in);\n      // ${h0}\n    }\n  }`}`;
+  return hints.join("\n");
+}
+
 async function purchaseHelp(request: Request, body: Body) {
   const session = await requireRole(request, "participant");
   if (!session)
     return json({ error: "Participant authorization required" }, 403);
   const kind = String(body.kind || ""),
-    cost = helpCosts[kind];
+    cost = helpCosts[kind],
+    questionId = Number(body.questionId);
   if (!cost) return json({ error: "Invalid help type" }, 400);
+  if (!Number.isInteger(questionId))
+    return json({ error: "Invalid coding question" }, 400);
   const database = db();
   await database.begin(async (tx) => {
     const [p] =
@@ -557,39 +602,43 @@ async function purchaseHelp(request: Request, body: Body) {
     if (!p?.language || Number(p.helps_used) >= 3 || Number(p.coins) < cost)
       throw new Error("Purchase limit or balance check failed");
     const [q] =
-      await tx`SELECT id, hints_json FROM coding_questions WHERE id=${p.current_question}`;
-    const hints = q.hints_json as string[];
-    const content =
-      kind === "small"
-        ? hints[0]
-        : kind === "algorithm"
-          ? hints[1]
-          : kind === "pseudocode"
-            ? hints[2]
-            : kind === "reveal"
-              ? `Starter guidance: ${hints.join(" ")}`
-              : "AI guidance unlocked for three messages. Focus on explaining and debugging, never a complete solution.";
+      await tx`SELECT id, title, hints_json FROM coding_questions WHERE id=${questionId}`;
+    if (!q) throw new Error("Coding question not found");
+    const [existing] =
+      await tx`SELECT id FROM help_purchases WHERE participant_id=${session.id} AND question_id=${questionId} AND kind=${kind}`;
+    if (existing)
+      throw new Error("You already purchased this help for this question");
+    const hints = (q.hints_json as string[]) || [];
+    const content = buildHelpContent(
+      kind,
+      hints,
+      String(q.title),
+      String(p.language),
+    );
     const before = Number(p.coins),
       after = before - cost,
       now = Date.now();
     await tx`UPDATE participants SET coins=${after}, helps_used=helps_used+1 WHERE user_id=${session.id}`;
     await tx`INSERT INTO help_purchases (participant_id, question_id, kind, cost, language, content, created_at) VALUES (${session.id}, ${q.id}, ${kind}, ${cost}, ${p.language}, ${content}, ${now})`;
-    await tx`INSERT INTO coin_transactions (participant_id, type, description, balance_before, amount, balance_after, created_at) VALUES (${session.id}, 'help_purchase', ${kind}, ${before}, ${-cost}, ${after}, ${now})`;
+    await tx`INSERT INTO coin_transactions (participant_id, type, description, balance_before, amount, balance_after, created_at) VALUES (${session.id}, 'help_purchase', ${kind + " for Q" + questionId}, ${before}, ${-cost}, ${after}, ${now})`;
   });
   return snapshot(request);
 }
 
-async function submitCode(request: Request, body: Body) {
+async function runSample(request: Request, body: Body) {
   const session = await requireRole(request, "participant");
   if (!session)
     return json({ error: "Participant authorization required" }, 403);
-  if (!queueEnabled()) return json({ error: "Judge queue is disabled" }, 503);
-  const source = String(body.source || "");
+  if (!queueEnabled()) return json({ error: "Judge is disabled" }, 503);
+  const source = String(body.source || ""),
+    questionId = Number(body.questionId);
   if (!source || source.length > 50000)
     return json(
       { error: "Source must be between 1 and 50,000 characters" },
       400,
     );
+  if (!Number.isInteger(questionId))
+    return json({ error: "Invalid question" }, 400);
   const database = db();
   let submissionId: unknown;
   await database.begin(async (tx) => {
@@ -598,6 +647,7 @@ async function submitCode(request: Request, body: Body) {
     const [round] = await tx<Row[]>`SELECT * FROM rounds WHERE id='round2'`;
     if (
       !p?.language ||
+      p.coding_submitted_at ||
       !round ||
       round.status !== "active" ||
       remaining({
@@ -610,16 +660,16 @@ async function submitCode(request: Request, body: Body) {
     )
       throw new Error("Submissions are currently locked");
     const [question] =
-      await tx`SELECT id FROM coding_questions WHERE id=${p.current_question}`;
-    if (!question) throw new Error("All coding questions are already solved");
+      await tx`SELECT id FROM coding_questions WHERE id=${questionId}`;
+    if (!question) throw new Error("Coding question not found");
     const active =
       await tx`SELECT id FROM submission_jobs WHERE participant_id=${session.id} AND status IN ('queued','running') LIMIT 1`;
     if (active.length)
       throw new Error("A submission is already queued or running");
     const [submission] =
-      await tx`INSERT INTO submissions (participant_id, question_id, language, source, verdict, created_at) VALUES (${session.id}, ${p.current_question}, ${p.language}, ${source}, 'queued', ${Date.now()}) RETURNING id`;
+      await tx`INSERT INTO submissions (participant_id, question_id, language, source, verdict, created_at) VALUES (${session.id}, ${questionId}, ${p.language}, ${source}, 'queued', ${Date.now()}) RETURNING id`;
     submissionId = submission.id;
-    await tx`INSERT INTO submission_jobs (submission_id, participant_id, question_id, language, source) VALUES (${submission.id}, ${session.id}, ${p.current_question}, ${p.language}, ${source})`;
+    await tx`INSERT INTO submission_jobs (submission_id, participant_id, question_id, language, source, mode) VALUES (${submission.id}, ${session.id}, ${questionId}, ${p.language}, ${source}, 'run')`;
   });
   return json(
     {
@@ -631,20 +681,110 @@ async function submitCode(request: Request, body: Body) {
   );
 }
 
+async function submitCode(request: Request, body: Body) {
+  const session = await requireRole(request, "participant");
+  if (!session)
+    return json({ error: "Participant authorization required" }, 403);
+  if (!queueEnabled()) return json({ error: "Judge queue is disabled" }, 503);
+  const source = String(body.source || ""),
+    questionId = Number(body.questionId);
+  if (!source || source.length > 50000)
+    return json(
+      { error: "Source must be between 1 and 50,000 characters" },
+      400,
+    );
+  if (!Number.isInteger(questionId))
+    return json({ error: "Invalid coding question" }, 400);
+  const database = db();
+  let submissionId: unknown;
+  await database.begin(async (tx) => {
+    const [p] =
+      await tx`SELECT * FROM participants WHERE user_id=${session.id} FOR UPDATE`;
+    const [round] = await tx<Row[]>`SELECT * FROM rounds WHERE id='round2'`;
+    if (
+      !p?.language ||
+      p.coding_submitted_at ||
+      !round ||
+      round.status !== "active" ||
+      remaining({
+        status: String(round.status),
+        duration_seconds: Number(round.duration_seconds),
+        started_at: Number(round.started_at),
+        paused_at: round.paused_at ? Number(round.paused_at) : null,
+        accumulated_pause_seconds: Number(round.accumulated_pause_seconds),
+      }) <= 0
+    )
+      throw new Error("Submissions are currently locked");
+    const [question] =
+      await tx`SELECT id FROM coding_questions WHERE id=${questionId}`;
+    if (!question) throw new Error("Coding question not found");
+    const [successfulRun] =
+      await tx`SELECT id FROM submission_jobs WHERE participant_id=${session.id} AND question_id=${questionId} AND mode='run' AND status='completed' AND source=${source} AND COALESCE((result_json->>'executionOk')::boolean, false)=true ORDER BY created_at DESC LIMIT 1`;
+    if (!successfulRun)
+      throw new Error("Run this exact code successfully before submitting it");
+    const active =
+      await tx`SELECT id FROM submission_jobs WHERE participant_id=${session.id} AND status IN ('queued','running') LIMIT 1`;
+    if (active.length)
+      throw new Error("A submission is already queued or running");
+    const [submission] =
+      await tx`INSERT INTO submissions (participant_id, question_id, language, source, verdict, created_at) VALUES (${session.id}, ${questionId}, ${p.language}, ${source}, 'queued', ${Date.now()}) RETURNING id`;
+    submissionId = submission.id;
+    await tx`INSERT INTO submission_jobs (submission_id, participant_id, question_id, language, source, mode) VALUES (${submission.id}, ${session.id}, ${questionId}, ${p.language}, ${source}, 'submit')`;
+  });
+  return json(
+    {
+      queued: true,
+      submissionId: String(submissionId),
+      state: await (await snapshot(request)).json(),
+    },
+    202,
+  );
+}
+
+async function finishCoding(request: Request) {
+  const session = await requireRole(request, "participant");
+  if (!session)
+    return json({ error: "Participant authorization required" }, 403);
+  const database = db();
+  const [round] = await database`SELECT status FROM rounds WHERE id='round2'`;
+  if (round?.status !== "active")
+    return json({ error: "Round 2 is not active" }, 409);
+  const [active] =
+    await database`SELECT id FROM submission_jobs WHERE participant_id=${session.id} AND status IN ('queued','running') LIMIT 1`;
+  if (active)
+    return json(
+      { error: "Wait for the current execution to finish before turning in" },
+      409,
+    );
+  const [{ total, attempted }] = await database<
+    { total: number; attempted: number }[]
+  >`SELECT (SELECT count(*)::int FROM coding_questions) AS total, count(DISTINCT question_id)::int AS attempted FROM submission_jobs WHERE participant_id=${session.id} AND mode='submit' AND status='completed'`;
+  if (attempted < total)
+    return json(
+      {
+        error: `Execute a submission for every question before turning in (${attempted}/${total} attempted)`,
+      },
+      409,
+    );
+  const now = Date.now();
+  await database`UPDATE participants SET coding_submitted_at=COALESCE(coding_submitted_at, ${now}), completion_time=COALESCE(completion_time, ${now}), status='completed' WHERE user_id=${session.id}`;
+  return snapshot(request);
+}
+
 function serviceError(error: unknown) {
   const message = error instanceof Error ? error.message : "";
   if (
-    /SUPABASE_DATABASE_URL|SESSION_SECRET|EVENT_HOST_PASSWORD|Database is not configured|must contain at least|must use a postgres:/i.test(
+    /DATABASE_URL|SESSION_SECRET|EVENT_HOST_PASSWORD|Database is not configured|must contain at least|must use a postgres:/i.test(
       message,
     )
   )
     return message;
-  if (/ENOTFOUND|getaddrinfo/i.test(message))
-    return "Supabase cannot be reached. Use the IPv4 Transaction pooler connection string from the Supabase Connect dialog.";
-  if (/password authentication failed|Tenant or user not found/i.test(message))
-    return "Supabase rejected the database credentials. Copy a fresh Transaction pooler string and replace [YOUR-PASSWORD] with your URL-encoded password.";
+  if (/ENOTFOUND|getaddrinfo|ECONNREFUSED/i.test(message))
+    return "Database cannot be reached. Ensure Docker is running and the Postgres container is started: docker start code-auction-db";
+  if (/password authentication failed/i.test(message))
+    return "Database rejected credentials. Check DATABASE_URL in .env.local.";
   if (/relation .* does not exist/i.test(message))
-    return "The database is connected but not initialized. Run npm run db:migrate and refresh this page.";
+    return "Database is connected but not initialized. Run: npm run db:migrate";
   return "Event service unavailable";
 }
 
@@ -657,6 +797,7 @@ export async function GET(request: Request) {
     return json({ error: serviceError(error) }, 503);
   }
 }
+
 export async function POST(request: Request) {
   let body: Body;
   try {
@@ -683,7 +824,9 @@ export async function POST(request: Request) {
     if (action === "select-language")
       return await selectLanguage(request, body);
     if (action === "purchase-help") return await purchaseHelp(request, body);
+    if (action === "run-sample") return await runSample(request, body);
     if (action === "submit-code") return await submitCode(request, body);
+    if (action === "finish-coding") return await finishCoding(request);
     return json({ error: "Unknown action" }, 400);
   } catch (error) {
     console.error(error);
@@ -691,9 +834,12 @@ export async function POST(request: Request) {
     const safeMessages = new Set([
       "Participant not found",
       "Purchase limit or balance check failed",
+      "You already purchased this help for this question",
       "Submissions are currently locked",
       "All coding questions are already solved",
+      "Coding question not found",
       "A submission is already queued or running",
+      "Run this exact code successfully before submitting it",
       "No participant IDs are available",
       "Each question needs a title and a complete statement",
       "Question difficulty or points are invalid",

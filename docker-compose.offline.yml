@@ -1,0 +1,100 @@
+name: techx-code-auction
+
+services:
+  database:
+    image: postgres:16-alpine
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: codeauction
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: codeauction
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - code-auction-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codeauction -d codeauction"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    shm_size: 256mb
+
+  web:
+    image: techx-code-auction-web:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://codeauction:${POSTGRES_PASSWORD}@database:5432/codeauction
+      DATABASE_SSL: "false"
+      DATABASE_POOL_SIZE: "20"
+      SESSION_SECRET: ${SESSION_SECRET}
+      EVENT_HOST_PASSWORD: ${EVENT_HOST_PASSWORD}
+      JUDGE_QUEUE_ENABLED: "true"
+    ports:
+      - "0.0.0.0:3000:3000"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  judge-worker:
+    image: techx-code-auction-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://codeauction:${POSTGRES_PASSWORD}@database:5432/codeauction
+      DATABASE_SSL: "false"
+      WORKER_ID: laptop-judge
+      WORKER_CONCURRENCY: "4"
+      WORKER_POLL_INTERVAL_MS: "250"
+      WORKER_MAX_ATTEMPTS: "3"
+      WORKER_HEALTH_PORT: "9091"
+      SANDBOX_TIMEOUT_MS: "10000"
+      SANDBOX_MEMORY_MB: "256"
+      SANDBOX_CPUS: "0.5"
+      PYTHON_SANDBOX_IMAGE: python:3.12-slim
+      JAVA_SANDBOX_IMAGE: eclipse-temurin:21-jdk-jammy
+      WORKER_WORKSPACE_ROOT: /opt/code-auction/worker-data
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - worker-data:/opt/code-auction/worker-data
+    ports:
+      - "127.0.0.1:9091:9091"
+    depends_on:
+      database:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:9091/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    stop_grace_period: 20s
+
+volumes:
+  code-auction-data:
+  worker-data:

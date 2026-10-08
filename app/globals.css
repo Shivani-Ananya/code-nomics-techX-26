@@ -30,3 +30,55 @@ button:disabled{cursor:not-allowed;opacity:.5}
 .danger-action{display:block!important;background:#fff!important;color:var(--red)!important;border-color:#d97989!important}.danger-action:hover{background:#fbe9ed!important}.team-filters{display:flex;gap:6px;margin-top:10px}.team-filters button{padding:6px 9px;border:1px solid #d7cadf;background:#fff;color:#75637e;font:800 9px ui-monospace}.team-filters button.active{background:#6d168d;color:#fff;border-color:#6d168d}.tablebox>header>div{min-width:0}
 @media(max-width:1100px){.host-management{grid-template-columns:1fr}}
 @media(max-width:650px){.host-management{display:block}.management-card{margin-top:12px}.question-fields{grid-template-columns:1fr}.question-fields .wide{grid-column:auto}.single-entry{grid-template-columns:1fr}.confirm-card{padding:22px}}
+.fullscreen-gate{z-index:60}.fullscreen-gate .confirm-card>svg{display:block;margin:20px 0 4px;color:#6d168d}.problemtabs aside .turn-in{background:#6d168d;color:#fff;border-color:#6d168d;font-weight:800}.partial-score{margin-left:auto;color:#6d168d!important}.codearea>footer{justify-content:space-between}.codearea>footer .submit{margin-left:auto}.problemtabs button small+small{color:#27865f;margin-left:3px}
+
+/* ── RUN button ─────────────────────────────────────────────── */
+.codearea footer button.run {
+  background: #1a7f37;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: .5rem 1.2rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s;
+}
+.codearea footer button.run:hover:not(:disabled) { background: #22a44a; }
+.codearea footer button.run:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ── Console output panels ──────────────────────────────────── */
+.console { display: flex; flex-direction: column; gap: 0; }
+.console-tabs { display: flex; gap: .75rem; padding: .4rem .75rem; background: #111; border-bottom: 1px solid #222; font-size: .7rem; letter-spacing: .08em; color: #888; }
+.console-tabs b { color: #aaa; }
+.console-sep { color: #333 !important; }
+.run-out { background: #0d1f0d; color: #8fff8a; border-left: 3px solid #1a7f37; padding: .5rem .75rem; margin: 0; font-size: .82rem; white-space: pre-wrap; max-height: 120px; overflow-y: auto; }
+.run-out.fail { background: #1f0d0d; color: #ff9090; border-left-color: #a33; }
+.run-out.pass { border-left-color: #1a7f37; }
+.judge-out { background: #0d0d1f; color: #c0cce0; padding: .5rem .75rem; margin: 0; font-size: .82rem; white-space: pre-wrap; max-height: 140px; overflow-y: auto; }
+.judge-out.pass { background: #0d1f0d; color: #8fff8a; border-left: 3px solid #1a7f37; }
+.judge-out.fail { background: #1f0d0d; color: #ff9090; border-left: 3px solid #a33; }
+.judge-out.pending { background: #1a1600; color: #ffd060; border-left: 3px solid #cc9900; }
+
+/* ── Marketplace overhaul ───────────────────────────────────── */
+.market { background: #111827; border-radius: 12px; padding: 1.5rem; max-width: 520px; width: 95vw; max-height: 90vh; overflow-y: auto; }
+.market header { display: flex; justify-content: space-between; align-items: center; margin-bottom: .75rem; }
+.market header button { background: none; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }
+.market-balance { display: flex; gap: 1.5rem; background: #1e293b; border-radius: 8px; padding: .6rem 1rem; margin-bottom: .5rem; font-size: .85rem; }
+.market-balance .gold { color: #fbbf24; font-weight: 700; }
+.market-note { font-size: .75rem; color: #6b7280; margin-bottom: .75rem; }
+.market-item { display: flex; justify-content: space-between; align-items: center; background: #1e293b; border-radius: 8px; padding: .75rem 1rem; margin-bottom: .5rem; gap: 1rem; }
+.market-item.bought { opacity: .7; border-left: 3px solid #1a7f37; }
+.market-item > span > b { display: block; font-size: .9rem; }
+.market-item > span > small { color: #6b7280; font-size: .75rem; }
+.market-item-right { display: flex; align-items: center; gap: .75rem; flex-shrink: 0; }
+.market-item-right strong { color: #fbbf24; font-size: .85rem; white-space: nowrap; }
+.buy-btn { background: #1d4ed8; color: #fff; border: none; border-radius: 6px; padding: .35rem .9rem; font-size: .8rem; font-weight: 700; cursor: pointer; }
+.buy-btn:hover:not(:disabled) { background: #2563eb; }
+.buy-btn:disabled { opacity: .4; cursor: not-allowed; }
+.view-btn { background: #065f46; color: #d1fae5; border: none; border-radius: 6px; padding: .35rem .9rem; font-size: .8rem; font-weight: 700; cursor: pointer; }
+.view-btn:hover { background: #047857; }
+.market-purchases { margin-top: 1rem; }
+.purchased-list h4 { font-size: .75rem; letter-spacing: .1em; color: #6b7280; margin-bottom: .5rem; }
+.purchase-card { background: #0d1f0d; border-left: 3px solid #1a7f37; border-radius: 6px; padding: .6rem .8rem; margin-bottom: .5rem; }
+.purchase-card b { display: block; font-size: .75rem; color: #6ee7b7; margin-bottom: .4rem; }
+.purchase-card pre { color: #a7f3d0; font-size: .8rem; white-space: pre-wrap; margin: 0; max-height: 180px; overflow-y: auto; }

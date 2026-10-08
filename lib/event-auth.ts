@@ -60,12 +60,26 @@ export async function readSession(request: Request): Promise<Session | null> {
 }
 
 export function sessionCookie(token: string, request: Request) {
-  const secure = process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const forwardedProtocol = request.headers
+    .get("x-forwarded-proto")
+    ?.split(",")[0]
+    ?.trim();
+  const secure =
+    forwardedProtocol === "https" || new URL(request.url).protocol === "https:"
+      ? "; Secure"
+      : "";
   return "ca_session=" + token + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200" + secure;
 }
 
 export function clearSessionCookie(request: Request) {
-  const secure = process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const forwardedProtocol = request.headers
+    .get("x-forwarded-proto")
+    ?.split(",")[0]
+    ?.trim();
+  const secure =
+    forwardedProtocol === "https" || new URL(request.url).protocol === "https:"
+      ? "; Secure"
+      : "";
   return "ca_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0" + secure;
 }
 
