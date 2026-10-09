@@ -40,9 +40,23 @@ export async function ensureSeeded() {
           quizState.unique_prompts !== quizQuestions.length));
     if (replaceQuiz) {
       await tx`DELETE FROM quiz_questions`;
-      for (const q of quizQuestions) {
-        await tx`INSERT INTO quiz_questions (category, difficulty, prompt, options_json, correct_index, coin_value) VALUES (${q.category}, ${q.difficulty}, ${q.prompt}, ${tx.json([...q.options])}, ${q.correctIndex}, ${q.coinValue})`;
-      }
+      const quizRows = quizQuestions.map((question) => ({
+        category: question.category,
+        difficulty: question.difficulty,
+        prompt: question.prompt,
+        options_json: tx.json([...question.options]),
+        correct_index: question.correctIndex,
+        coin_value: question.coinValue,
+      }));
+      await tx`INSERT INTO quiz_questions ${tx(
+        quizRows,
+        "category",
+        "difficulty",
+        "prompt",
+        "options_json",
+        "correct_index",
+        "coin_value",
+      )}`;
     }
 
     const codingRows = await tx<{ id: number; title: string }[]>`SELECT id, title FROM coding_questions ORDER BY id`;
@@ -69,11 +83,46 @@ export async function ensureSeeded() {
       );
     if ((codingRows.length === 0 || isLegacyCodingBank) && codingActivity === 0) {
       await tx`DELETE FROM coding_questions`;
-      for (const q of codingQuestions) {
-        await tx`INSERT INTO coding_questions (id, title, difficulty, points, statement, input_format, output_format, sample_input, sample_output, hints_json) VALUES (${q.id}, ${q.title}, ${q.difficulty}, ${q.points}, ${q.statement}, ${q.input}, ${q.output}, ${q.sampleIn}, ${q.sampleOut}, ${tx.json([...q.hints])})`;
-        for (const [index, test] of q.tests.entries())
-          await tx`INSERT INTO test_cases (question_id, input, expected_output, position) VALUES (${q.id}, ${test[0]}, ${test[1]}, ${index + 1})`;
-      }
+      const codingQuestionRows = codingQuestions.map((question) => ({
+        id: question.id,
+        title: question.title,
+        difficulty: question.difficulty,
+        points: question.points,
+        statement: question.statement,
+        input_format: question.input,
+        output_format: question.output,
+        sample_input: question.sampleIn,
+        sample_output: question.sampleOut,
+        hints_json: tx.json([...question.hints]),
+      }));
+      await tx`INSERT INTO coding_questions ${tx(
+        codingQuestionRows,
+        "id",
+        "title",
+        "difficulty",
+        "points",
+        "statement",
+        "input_format",
+        "output_format",
+        "sample_input",
+        "sample_output",
+        "hints_json",
+      )}`;
+      const testCaseRows = codingQuestions.flatMap((question) =>
+        question.tests.map(([input, expectedOutput], index) => ({
+          question_id: question.id,
+          input,
+          expected_output: expectedOutput,
+          position: index + 1,
+        })),
+      );
+      await tx`INSERT INTO test_cases ${tx(
+        testCaseRows,
+        "question_id",
+        "input",
+        "expected_output",
+        "position",
+      )}`;
     }
   });
 }
