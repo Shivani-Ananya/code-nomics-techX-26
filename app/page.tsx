@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
@@ -188,42 +188,181 @@ function useConfirmDialog() {
   return { ask, popup };
 }
 
-function FullscreenPrompt({ round }: { round: "round1" | "round2" }) {
-  const storageKey = `techx-fullscreen-choice-${round}`;
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    setVisible(sessionStorage.getItem(storageKey) !== "done");
-  }, [storageKey]);
-  const finish = () => {
-    sessionStorage.setItem(storageKey, "done");
-    setVisible(false);
-  };
-  const enter = async () => {
+type SecurityNotice = {
+  violationCount: number;
+  warningsRemaining: number;
+  disqualified: boolean;
+  reason: string;
+  timestamp: number;
+  deduplicated?: boolean;
+};
+
+function ExamSecurity({
+  round,
+  state,
+  setState,
+  setError,
+}: {
+  round: "round1" | "round2";
+  state: EventState;
+  setState: (s: EventState) => void;
+  setError: (s: string) => void;
+}) {
+  const [needsFullscreen, setNeedsFullscreen] = useState(true);
+  const [notice, setNotice] = useState<SecurityNotice | null>(null);
+  const armed = useRef(false);
+  const reporting = useRef(false);
+  const lastLocalReport = useRef(0);
+
+  const enterSecureMode = useCallback(async () => {
     try {
-      await document.documentElement.requestFullscreen();
-    } finally {
-      finish();
+      if (!document.fullscreenElement)
+        await document.documentElement.requestFullscreen();
+      armed.current = true;
+      setNeedsFullscreen(false);
+      setNotice(null);
+      setError("");
+    } catch {
+      setError("Fullscreen is required to participate. Allow fullscreen and try again.");
+      setNeedsFullscreen(true);
     }
-  };
-  if (!visible) return null;
+  }, [setError]);
+
+  const reportViolation = useCallback(
+    async (reason: string) => {
+      const now = Date.now();
+      if (!armed.current || reporting.current || now - lastLocalReport.current < 1000)
+        return;
+      lastLocalReport.current = now;
+      reporting.current = true;
+      try {
+        const eventId =
+          typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `${now}-${Math.random().toString(36).slice(2)}`;
+        const response = await fetch("/api/event", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            action: "security-violation",
+            round,
+            reason,
+            eventId,
+          }),
+          keepalive: true,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Security event could not be recorded");
+        if (data.securityNotice && !data.securityNotice.deduplicated)
+          setNotice(data.securityNotice);
+        setState(data);
+      } catch (error) {
+        setError((error as Error).message);
+      } finally {
+        reporting.current = false;
+      }
+    },
+    [round, setError, setState],
+  );
+
+  useEffect(() => {
+    armed.current = Boolean(document.fullscreenElement);
+    setNeedsFullscreen(!document.fullscreenElement);
+    document.body.classList.add("exam-security-active");
+
+    const isEditor = (target: EventTarget | null) =>
+      target instanceof Element && Boolean(target.closest(".cm-editor"));
+    const blockClipboard = (event: Event) => {
+      event.preventDefault();
+      const reason =
+        event.type === "copy"
+          ? "copy-attempt"
+          : event.type === "cut"
+            ? "cut-attempt"
+            : "paste-attempt";
+      void reportViolation(reason);
+    };
+    const blockSelection = (event: Event) => {
+      if (!isEditor(event.target)) event.preventDefault();
+    };
+    const blockContextMenu = (event: Event) => {
+      event.preventDefault();
+      void reportViolation("context-menu-attempt");
+    };
+    const blockShortcuts = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const modifier = event.ctrlKey || event.metaKey;
+      if (modifier && ["c", "v", "x", "a", "t", "n", "w"].includes(key)) {
+        event.preventDefault();
+        void reportViolation(key === "a" ? "select-all-attempt" : ["c", "v", "x"].includes(key) ? `${key === "c" ? "copy" : key === "v" ? "paste" : "cut"}-attempt` : "blocked-browser-shortcut");
+      } else if ((event.ctrlKey && key === "tab") || (event.altKey && key === "tab") || key === "meta") {
+        event.preventDefault();
+        void reportViolation("blocked-browser-shortcut");
+      }
+    };
+    const visibilityChanged = () => {
+      if (document.visibilityState === "hidden") void reportViolation("tab-hidden");
+    };
+    const focusLost = () => void reportViolation("window-focus-lost");
+    const fullscreenChanged = () => {
+      const fullscreen = Boolean(document.fullscreenElement);
+      setNeedsFullscreen(!fullscreen);
+      if (!fullscreen && armed.current) void reportViolation("fullscreen-exit");
+      if (fullscreen) armed.current = true;
+    };
+
+    document.addEventListener("copy", blockClipboard, true);
+    document.addEventListener("cut", blockClipboard, true);
+    document.addEventListener("paste", blockClipboard, true);
+    document.addEventListener("selectstart", blockSelection, true);
+    document.addEventListener("contextmenu", blockContextMenu, true);
+    document.addEventListener("keydown", blockShortcuts, true);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    document.addEventListener("fullscreenchange", fullscreenChanged);
+    window.addEventListener("blur", focusLost);
+    return () => {
+      document.body.classList.remove("exam-security-active");
+      document.removeEventListener("copy", blockClipboard, true);
+      document.removeEventListener("cut", blockClipboard, true);
+      document.removeEventListener("paste", blockClipboard, true);
+      document.removeEventListener("selectstart", blockSelection, true);
+      document.removeEventListener("contextmenu", blockContextMenu, true);
+      document.removeEventListener("keydown", blockShortcuts, true);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      document.removeEventListener("fullscreenchange", fullscreenChanged);
+      window.removeEventListener("blur", focusLost);
+    };
+  }, [reportViolation]);
+
+  const count = Number(state.participant?.securityViolationCount || 0);
+  const remaining = Math.max(0, 3 - count);
   return (
-    <div className="overlay fullscreen-gate">
-      <section className="confirm-card">
-        <Pill>EVENT DISPLAY</Pill>
-        <Maximize2 size={34} />
-        <h2>Enter fullscreen mode</h2>
-        <p>
-          Fullscreen improves focus during the event. You may still leave
-          fullscreen or switch browser tabs whenever needed.
-        </p>
-        <footer>
-          <button onClick={finish}>CONTINUE WINDOWED</button>
-          <button className="primary" onClick={enter}>
-            ENTER FULLSCREEN
-          </button>
-        </footer>
-      </section>
-    </div>
+    <>
+      <div className={`exam-security-status ${count ? "warn" : ""}`}>
+        <ShieldCheck size={15} /> EXAM SECURITY · {remaining} WARNING{remaining === 1 ? "" : "S"} LEFT
+      </div>
+      {(needsFullscreen || notice) && (
+        <div className="overlay fullscreen-gate">
+          <section className="confirm-card security-card" role="alertdialog" aria-modal="true">
+            <Pill kind={notice ? "hard" : "cyan"}>
+              {notice ? (notice.violationCount === 1 ? "FIRST WARNING" : "FINAL WARNING") : "EXAM SECURITY"}
+            </Pill>
+            <Maximize2 size={34} />
+            <h2>{notice ? "Security violation detected" : "Fullscreen is required"}</h2>
+            <p>
+              {notice
+                ? `Reason: ${notice.reason.replaceAll("-", " ")}. ${notice.warningsRemaining} warning${notice.warningsRemaining === 1 ? "" : "s"} remain before automatic disqualification.`
+                : "Enter fullscreen to begin. Leaving this tab, losing window focus, exiting fullscreen, clipboard actions, right-click, and blocked browser shortcuts are recorded."}
+            </p>
+            <footer>
+              <button className="primary" onClick={enterSecureMode}>
+                {notice ? "ACKNOWLEDGE & CONTINUE" : "ENTER SECURE FULLSCREEN"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+    </>
   );
 }
 function Top({ state, label }: { state: EventState; label: string }) {
@@ -454,8 +593,12 @@ export default function Home() {
   if (p.disqualified || p.locked)
     return (
       <StatusScreen
-        title="Account locked"
-        text="The host has locked this participant account. Contact the event desk."
+        title={p.disqualified ? "Participant disqualified" : "Account locked"}
+        text={
+          p.disqualified
+            ? "Three exam-security violations were recorded. Submissions are locked until a host explicitly resets this participant."
+            : "The host has locked this participant account. Contact the event desk."
+        }
       />
     );
   if (!p.quizSubmittedAt && r1.status === "active")
@@ -562,6 +705,8 @@ function Quiz({
   const [current, setCurrent] = useState(0);
   const { ask, popup } = useConfirmDialog();
   const q = state.quiz![current];
+  const totalQuestions = state.quiz?.length || 40;
+  const isLastQuestion = current === totalQuestions - 1;
   const answer = async (index: number) => {
     setAnswers((old) => ({ ...old, [q.id]: index }));
     try {
@@ -593,12 +738,17 @@ function Quiz({
   }, [state.rounds.round1?.remainingSeconds, setError, setState]);
   return (
     <div className="app">
-      <FullscreenPrompt round="round1" />
+      <ExamSecurity
+        round="round1"
+        state={state}
+        setState={setState}
+        setError={setError}
+      />
       <Top state={state} label="ROUND 1 / QUIZ" />
       <main className="quiz">
         <section className="question">
           <div className="eyebrow">
-            QUESTION {current + 1} / 40{" "}
+            QUESTION {current + 1} / {totalQuestions}{" "}
             <Pill kind={q.difficulty.toLowerCase()}>{q.difficulty}</Pill>
           </div>
           <small>{q.category}</small>
@@ -617,15 +767,25 @@ function Quiz({
             ))}
           </div>
           <footer>
-            <button onClick={() => setCurrent(Math.max(0, current - 1))}>
+            <button
+              onClick={() => setCurrent(Math.max(0, current - 1))}
+              disabled={current === 0}
+            >
               Previous
             </button>
-            <button className="submit" onClick={submit}>
-              SUBMIT QUIZ
-            </button>
-            <button onClick={() => setCurrent(Math.min(39, current + 1))}>
-              Next
-            </button>
+            {isLastQuestion ? (
+              <button className="submit" onClick={submit}>
+                SUBMIT QUIZ
+              </button>
+            ) : (
+              <button
+                onClick={() =>
+                  setCurrent(Math.min(totalQuestions - 1, current + 1))
+                }
+              >
+                Next
+              </button>
+            )}
           </footer>
         </section>
         <aside>
@@ -664,6 +824,7 @@ function Quiz({
 }
 
 function Language({
+  state,
   setState,
   setError,
 }: {
@@ -689,7 +850,12 @@ function Language({
   };
   return (
     <div className="language">
-      <FullscreenPrompt round="round2" />
+      <ExamSecurity
+        round="round2"
+        state={state}
+        setState={setState}
+        setError={setError}
+      />
       <Logo />
       <Pill>ROUND 2 IS LIVE</Pill>
       <h1>Choose your language</h1>
@@ -901,7 +1067,12 @@ function Coding({
   };
   return (
     <div className="ide">
-      <FullscreenPrompt round="round2" />
+      <ExamSecurity
+        round="round2"
+        state={state}
+        setState={setState}
+        setError={setError}
+      />
       <Top state={state} label="ROUND 2 / CODING" />
       <div className="problemtabs">
         <div>
@@ -1883,6 +2054,18 @@ function Host({
               </span>
               <Lock />
             </div>
+            <div className="prow">
+              <b>SECURITY</b>
+              <span>
+                {person.securityViolationCount || 0}/3 violations
+                <small>
+                  {person.securityLastViolationAt
+                    ? `${person.securityLastViolationReason?.replaceAll("-", " ") || "Recorded"} · ${new Date(person.securityLastViolationAt).toLocaleString()}`
+                    : "No violations recorded"}
+                </small>
+              </span>
+              <ShieldCheck />
+            </div>
             <div className="manual-score">
               <h4>MANUAL SCORE OVERRIDE</h4>
               <p>
@@ -1926,7 +2109,7 @@ function Host({
                 )}
                 {person.disqualified && (
                   <button onClick={() => moderate("reinstate")}>
-                    REINSTATE
+                    RESET SECURITY & REINSTATE
                   </button>
                 )}
                 <button className="danger" onClick={() => moderate("remove")}>

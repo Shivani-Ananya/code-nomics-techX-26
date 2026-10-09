@@ -31,6 +31,7 @@ button:disabled{cursor:not-allowed;opacity:.5}
 @media(max-width:1100px){.host-management{grid-template-columns:1fr}}
 @media(max-width:650px){.host-management{display:block}.management-card{margin-top:12px}.question-fields{grid-template-columns:1fr}.question-fields .wide{grid-column:auto}.single-entry{grid-template-columns:1fr}.confirm-card{padding:22px}}
 .fullscreen-gate{z-index:60}.fullscreen-gate .confirm-card>svg{display:block;margin:20px 0 4px;color:#6d168d}.problemtabs aside .turn-in{background:#6d168d;color:#fff;border-color:#6d168d;font-weight:800}.partial-score{margin-left:auto;color:#6d168d!important}.codearea>footer{justify-content:space-between}.codearea>footer .submit{margin-left:auto}.problemtabs button small+small{color:#27865f;margin-left:3px}
+.exam-security-active{user-select:none;-webkit-user-select:none}.exam-security-active .cm-editor,.exam-security-active .cm-editor *{user-select:text;-webkit-user-select:text}.exam-security-status{position:fixed;top:78px;right:12px;z-index:8;display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid #65b890;background:#effbf5;color:#17643f;font:800 10px ui-monospace;letter-spacing:.04em;box-shadow:0 5px 18px #2d123a1c}.exam-security-status.warn{border-color:#d69a52;background:#fff7e8;color:#8b4b00}.security-card footer{justify-content:stretch}.security-card footer .primary{width:100%}@media(max-width:650px){.exam-security-status{top:74px;right:6px;font-size:8px;padding:6px}}
 
 /* ── RUN button ─────────────────────────────────────────────── */
 .codearea footer button.run {
@@ -59,26 +60,190 @@ button:disabled{cursor:not-allowed;opacity:.5}
 .judge-out.fail { background: #1f0d0d; color: #ff9090; border-left: 3px solid #a33; }
 .judge-out.pending { background: #1a1600; color: #ffd060; border-left: 3px solid #cc9900; }
 
-/* ── Marketplace overhaul ───────────────────────────────────── */
-.market { background: #111827; border-radius: 12px; padding: 1.5rem; max-width: 520px; width: 95vw; max-height: 90vh; overflow-y: auto; }
-.market header { display: flex; justify-content: space-between; align-items: center; margin-bottom: .75rem; }
-.market header button { background: none; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }
-.market-balance { display: flex; gap: 1.5rem; background: #1e293b; border-radius: 8px; padding: .6rem 1rem; margin-bottom: .5rem; font-size: .85rem; }
-.market-balance .gold { color: #fbbf24; font-weight: 700; }
-.market-note { font-size: .75rem; color: #6b7280; margin-bottom: .75rem; }
-.market-item { display: flex; justify-content: space-between; align-items: center; background: #1e293b; border-radius: 8px; padding: .75rem 1rem; margin-bottom: .5rem; gap: 1rem; }
-.market-item.bought { opacity: .7; border-left: 3px solid #1a7f37; }
-.market-item > span > b { display: block; font-size: .9rem; }
-.market-item > span > small { color: #6b7280; font-size: .75rem; }
-.market-item-right { display: flex; align-items: center; gap: .75rem; flex-shrink: 0; }
-.market-item-right strong { color: #fbbf24; font-size: .85rem; white-space: nowrap; }
-.buy-btn { background: #1d4ed8; color: #fff; border: none; border-radius: 6px; padding: .35rem .9rem; font-size: .8rem; font-weight: 700; cursor: pointer; }
-.buy-btn:hover:not(:disabled) { background: #2563eb; }
-.buy-btn:disabled { opacity: .4; cursor: not-allowed; }
-.view-btn { background: #065f46; color: #d1fae5; border: none; border-radius: 6px; padding: .35rem .9rem; font-size: .8rem; font-weight: 700; cursor: pointer; }
-.view-btn:hover { background: #047857; }
-.market-purchases { margin-top: 1rem; }
-.purchased-list h4 { font-size: .75rem; letter-spacing: .1em; color: #6b7280; margin-bottom: .5rem; }
-.purchase-card { background: #0d1f0d; border-left: 3px solid #1a7f37; border-radius: 6px; padding: .6rem .8rem; margin-bottom: .5rem; }
-.purchase-card b { display: block; font-size: .75rem; color: #6ee7b7; margin-bottom: .4rem; }
-.purchase-card pre { color: #a7f3d0; font-size: .8rem; white-space: pre-wrap; margin: 0; max-height: 180px; overflow-y: auto; }
+/* ── Marketplace overhaul (TECHX Light/Purple Theme) ────────── */
+.overlay { background: rgba(36, 19, 47, 0.6); backdrop-filter: blur(3px); }
+.market {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.5rem;
+  max-width: 520px;
+  width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 50px rgba(53, 20, 67, 0.25);
+  color: var(--text);
+}
+.market header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.85rem;
+  border-bottom: 1px solid #eee5f4;
+  padding-bottom: 0.75rem;
+}
+.market header h2 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 800 20px ui-monospace;
+  color: #351443;
+}
+.market header h2 svg {
+  color: #6d168d;
+}
+.market header button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.3rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+.market header button:hover {
+  color: #6d168d;
+  background: #f4eaf8;
+}
+.market-balance {
+  display: flex;
+  gap: 1.25rem;
+  background: #f7f1fa;
+  border: 1px solid #e7dcee;
+  border-radius: 8px;
+  padding: 0.65rem 1rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.85rem;
+  color: #351443;
+  font-weight: 600;
+}
+.market-balance b {
+  color: #6d168d;
+}
+.market-balance .gold {
+  color: #854d0e;
+  font-weight: 800;
+}
+.market-note {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.85rem;
+  line-height: 1.4;
+}
+.market-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fcfafc;
+  border: 1px solid #e8dfea;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  gap: 1rem;
+  transition: all 0.15s ease;
+}
+.market-item:hover {
+  border-color: #c9b4d5;
+  background: #f8f3fa;
+}
+.market-item.bought {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-left: 4px solid #16a34a;
+}
+.market-item > span > b {
+  display: block;
+  font-size: 0.9rem;
+  color: #24132f;
+}
+.market-item > span > small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+.market-item-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+.market-item-right strong {
+  color: #854d0e;
+  font-size: 0.85rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.buy-btn {
+  background: #6d168d;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 0.95rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.buy-btn:hover:not(:disabled) {
+  background: #540e6e;
+}
+.buy-btn:disabled {
+  opacity: 0.45;
+  background: #9b89a4;
+  cursor: not-allowed;
+}
+.view-btn {
+  background: #15803d;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 0.95rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.view-btn:hover {
+  background: #166534;
+}
+.market-purchases {
+  margin-top: 1rem;
+  border-top: 1px solid #eee5f4;
+  padding-top: 0.85rem;
+}
+.purchased-list h4 {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  color: #6d168d;
+  margin-bottom: 0.5rem;
+  font-weight: 800;
+}
+.purchase-card {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-left: 4px solid #16a34a;
+  border-radius: 6px;
+  padding: 0.65rem 0.85rem;
+  margin-bottom: 0.5rem;
+}
+.purchase-card b {
+  display: block;
+  font-size: 0.78rem;
+  color: #15803d;
+  font-weight: 800;
+  margin-bottom: 0.4rem;
+}
+.purchase-card pre {
+  color: #14532d;
+  background: #ffffff;
+  border: 1px solid #dcfce7;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  margin: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: ui-monospace, monospace;
+}

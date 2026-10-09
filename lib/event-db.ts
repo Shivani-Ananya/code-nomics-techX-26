@@ -68,19 +68,29 @@ export async function ensureSeeded() {
         (SELECT count(*) FROM coding_question_scores) +
         (SELECT count(*) FROM help_purchases)
       )::int AS activity_count`;
-    const legacyCodingTitles = [
-      "Count Vowels",
-      "Find the Largest Number",
-      "Remove Duplicate Elements",
-      "Check for Anagram",
-      "First Non-Repeating Character",
+    const replaceableCodingBanks = [
+      [
+        "Count Vowels",
+        "Find the Largest Number",
+        "Remove Duplicate Elements",
+        "Check for Anagram",
+        "First Non-Repeating Character",
+      ],
+      [
+        "Rotate Array Right",
+        "Valid Bracket Sequence",
+        "Longest Unique Substring",
+        "Minimum Coins",
+        "Shortest Path in a Grid",
+      ],
     ];
-    const isLegacyCodingBank =
-      codingRows.length === legacyCodingTitles.length &&
-      codingRows.every(
-        (row, index) =>
-          row.id === index + 1 && row.title === legacyCodingTitles[index],
-      );
+    const isLegacyCodingBank = replaceableCodingBanks.some(
+      (titles) =>
+        codingRows.length === titles.length &&
+        codingRows.every(
+          (row, index) => row.id === index + 1 && row.title === titles[index],
+        ),
+    );
     if ((codingRows.length === 0 || isLegacyCodingBank) && codingActivity === 0) {
       await tx`DELETE FROM coding_questions`;
       const codingQuestionRows = codingQuestions.map((question) => ({

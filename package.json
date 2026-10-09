@@ -11,6 +11,7 @@
     "start": "next start",
     "lint": "eslint .",
     "questions:validate": "tsx scripts/validate-question-bank.ts",
+    "questions:reset-coding": "tsx scripts/reset-coding-bank.ts",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.mjs",
     "password:set": "node --env-file-if-exists=.env.local scripts/set-password.mjs",
     "worker:dev": "tsx worker/src/index.ts",

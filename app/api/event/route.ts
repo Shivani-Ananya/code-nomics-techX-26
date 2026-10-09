@@ -78,7 +78,7 @@ async function snapshot(request: Request) {
     ]),
   );
   const leaderboard =
-    await database`SELECT u.id, u.name, u.college, p.coins, p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore", p.language, p.current_question AS "currentQuestion", p.solved, p.helps_used AS "helpsUsed", p.completion_time AS "completionTime", p.status, p.last_seen::float8 AS "lastSeen", u.locked, u.disqualified FROM participants p JOIN users u ON u.id=p.user_id ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC, COALESCE(p.completion_time, 9999999999999) ASC`;
+    await database`SELECT u.id, u.name, u.college, p.coins, p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore", p.language, p.current_question AS "currentQuestion", p.solved, p.helps_used AS "helpsUsed", p.completion_time AS "completionTime", p.status, p.last_seen::float8 AS "lastSeen", p.security_violation_count AS "securityViolationCount", p.security_last_violation_at::float8 AS "securityLastViolationAt", p.security_last_violation_reason AS "securityLastViolationReason", u.locked, u.disqualified FROM participants p JOIN users u ON u.id=p.user_id ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC, COALESCE(p.completion_time, 9999999999999) ASC`;
   const [{ questionCount }] = await database<
     { questionCount: number }[]
   >`SELECT count(*)::int AS "questionCount" FROM coding_questions`;
@@ -97,7 +97,7 @@ async function snapshot(request: Request) {
     });
   await database`UPDATE participants SET last_seen=${Date.now()}, status=CASE WHEN status='waiting' THEN status ELSE 'online' END WHERE user_id=${session.id}`;
   const [participant] =
-    await database`SELECT u.id, u.name, u.college, u.locked, u.disqualified, p.quiz_submitted_at::float8 AS "quizSubmittedAt", p.quiz_correct AS "quizCorrect", p.coins, p.coding_score AS "codingScore", p.language, p.current_question AS "currentQuestion", p.solved, p.helps_used AS "helpsUsed", p.completion_time::float8 AS "completionTime", p.coding_submitted_at::float8 AS "codingSubmittedAt", p.status, p.last_seen::float8 AS "lastSeen" FROM users u JOIN participants p ON p.user_id=u.id WHERE u.id=${session.id}`;
+    await database`SELECT u.id, u.name, u.college, u.locked, u.disqualified, p.quiz_submitted_at::float8 AS "quizSubmittedAt", p.quiz_correct AS "quizCorrect", p.coins, p.coding_score AS "codingScore", p.language, p.current_question AS "currentQuestion", p.solved, p.helps_used AS "helpsUsed", p.completion_time::float8 AS "completionTime", p.coding_submitted_at::float8 AS "codingSubmittedAt", p.status, p.last_seen::float8 AS "lastSeen", p.security_violation_count AS "securityViolationCount", p.security_last_violation_at::float8 AS "securityLastViolationAt", p.security_last_violation_reason AS "securityLastViolationReason" FROM users u JOIN participants p ON p.user_id=u.id WHERE u.id=${session.id}`;
   const quiz =
     await database`SELECT id, category, difficulty, prompt, options_json AS options, coin_value AS "coinValue" FROM quiz_questions ORDER BY id`;
   const answers =
@@ -287,7 +287,8 @@ async function participantControl(request: Request, body: Body) {
   else if (control === "reinstate")
     await database.begin(async (tx) => {
       await tx`UPDATE users SET disqualified=false, locked=false WHERE id=${target}`;
-      await tx`UPDATE participants SET status='waiting' WHERE user_id=${target}`;
+      await tx`UPDATE participants SET status='waiting', security_violation_count=0, security_last_violation_at=NULL, security_last_violation_reason=NULL, security_disqualified_at=NULL WHERE user_id=${target}`;
+      await tx`DELETE FROM exam_violations WHERE participant_id=${target}`;
     });
   else if (control === "remove") {
     const removed =
@@ -295,6 +296,86 @@ async function participantControl(request: Request, body: Body) {
     if (!removed.length) return json({ error: "Participant not found" }, 404);
   } else return json({ error: "Invalid participant control" }, 400);
   return snapshot(request);
+}
+
+const securityReasons = new Set([
+  "tab-hidden",
+  "window-focus-lost",
+  "fullscreen-exit",
+  "copy-attempt",
+  "cut-attempt",
+  "paste-attempt",
+  "select-all-attempt",
+  "blocked-browser-shortcut",
+  "context-menu-attempt",
+]);
+
+async function recordSecurityViolation(request: Request, body: Body) {
+  const session = await readSession(request);
+  if (!session || session.role !== "participant")
+    return json({ error: "Participant authorization required" }, 403);
+  const reason = String(body.reason || "");
+  const roundId = body.round === "round1" ? "round1" : "round2";
+  const clientEventId = String(body.eventId || "");
+  if (!securityReasons.has(reason) || !/^[a-zA-Z0-9-]{16,80}$/.test(clientEventId))
+    return json({ error: "Invalid security event" }, 400);
+
+  const database = db();
+  const now = Date.now();
+  let notice: Row = {};
+  await database.begin(async (tx) => {
+    const [user] =
+      await tx`SELECT u.locked, u.disqualified, p.security_violation_count, p.security_last_violation_at FROM users u JOIN participants p ON p.user_id=u.id WHERE u.id=${session.id} AND u.role='participant' FOR UPDATE OF u, p`;
+    if (!user) throw new Error("Participant not found");
+
+    const [duplicate] =
+      await tx`SELECT id FROM exam_violations WHERE client_event_id=${clientEventId}`;
+    const currentCount = Number(user.security_violation_count || 0);
+    if (duplicate || user.disqualified) {
+      notice = {
+        violationCount: currentCount,
+        warningsRemaining: Math.max(0, 3 - currentCount),
+        disqualified: Boolean(user.disqualified),
+        reason,
+        timestamp: now,
+        deduplicated: true,
+      };
+      return;
+    }
+
+    const lastAt = user.security_last_violation_at
+      ? Number(user.security_last_violation_at)
+      : 0;
+    if (lastAt && now - lastAt < 2500) {
+      notice = {
+        violationCount: currentCount,
+        warningsRemaining: Math.max(0, 3 - currentCount),
+        disqualified: false,
+        reason,
+        timestamp: now,
+        deduplicated: true,
+      };
+      return;
+    }
+
+    const nextCount = Math.min(3, currentCount + 1);
+    const disqualified = nextCount >= 3;
+    await tx`INSERT INTO exam_violations (client_event_id, participant_id, round_id, reason, occurred_at) VALUES (${clientEventId}, ${session.id}, ${roundId}, ${reason}, ${now})`;
+    await tx`UPDATE participants SET security_violation_count=${nextCount}, security_last_violation_at=${now}, security_last_violation_reason=${reason}, security_disqualified_at=${disqualified ? now : null}, status=${disqualified ? "disqualified" : "online"} WHERE user_id=${session.id}`;
+    if (disqualified)
+      await tx`UPDATE users SET disqualified=true, locked=true WHERE id=${session.id}`;
+    notice = {
+      violationCount: nextCount,
+      warningsRemaining: Math.max(0, 3 - nextCount),
+      disqualified,
+      reason,
+      timestamp: now,
+      deduplicated: false,
+    };
+  });
+
+  const state = await (await snapshot(request)).json();
+  return json({ ...state, securityNotice: notice });
 }
 
 async function addTeams(request: Request, body: Body) {
@@ -815,6 +896,8 @@ export async function POST(request: Request) {
     if (action === "host-control") return await hostAction(request, body);
     if (action === "participant-control")
       return await participantControl(request, body);
+    if (action === "security-violation")
+      return await recordSecurityViolation(request, body);
     if (action === "add-teams") return await addTeams(request, body);
     if (action === "remove-all-teams") return await removeAllTeams(request);
     if (action === "add-questions") return await addQuestions(request, body);
