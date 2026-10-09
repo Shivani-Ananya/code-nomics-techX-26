@@ -153,6 +153,11 @@ function runProcess(
 
 async function execute(job: Job, test: TestCase, sourcePath: string) {
   const name = `ca-${job.id.slice(0, 8)}-${Math.random().toString(16).slice(2, 8)}`;
+  const sourceFile = join(
+    sourcePath,
+    job.language === "Python" ? "main.py" : "Main.java",
+  );
+  const containerSource = job.language === "Python" ? "/main.py" : "/Main.java";
   const common = [
     "create",
     "--name",
@@ -172,6 +177,8 @@ async function execute(job: Job, test: TestCase, sourcePath: string) {
     "--read-only",
     "--tmpfs",
     "/tmp:rw,nosuid,size=96m",
+    "--mount",
+    `type=bind,src=${sourceFile},dst=${containerSource},readonly`,
     "--user",
     "65534:65534",
     "-i",
@@ -188,20 +195,6 @@ async function execute(job: Job, test: TestCase, sourcePath: string) {
   try {
     const created = await runProcess([...common, ...languageArgs], "", name);
     if (created.code !== 0) return created;
-    const sourceFile = join(
-      sourcePath,
-      job.language === "Python" ? "main.py" : "Main.java",
-    );
-    const copied = await runProcess(
-      [
-        "cp",
-        sourceFile,
-        `${name}:${job.language === "Python" ? "/main.py" : "/Main.java"}`,
-      ],
-      "",
-      name,
-    );
-    if (copied.code !== 0) return copied;
     return await runProcess(["start", "-a", "-i", name], test.input, name);
   } finally {
     spawn("docker", ["rm", "-f", name], { stdio: "ignore" }).unref();
