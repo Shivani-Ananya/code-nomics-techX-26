@@ -2,15 +2,17 @@ import { pbkdf2Sync, randomBytes } from "node:crypto";
 import postgres from "postgres";
 
 function resolveDatabaseUrl() {
-  const value = process.env.SUPABASE_DATABASE_URL?.trim();
-  if (!value) throw new Error("SUPABASE_DATABASE_URL is required in .env.local");
-  if (/your[-_ ]?supabase|replace-with|example|changeme/i.test(value)) throw new Error("SUPABASE_DATABASE_URL is still a placeholder. Replace it with your real Supabase pooler connection string in .env.local.");
+  const value = (
+    process.env.DATABASE_URL || process.env.SUPABASE_DATABASE_URL
+  )?.trim();
+  if (!value) throw new Error("DATABASE_URL is required in .env.local");
+  if (/your[-_ ]?supabase|replace-with|example|changeme/i.test(value)) throw new Error("DATABASE_URL is still a placeholder. Replace it with your real database connection string in .env.local.");
   try {
     const parsed = new URL(value);
-    if (!/^(postgres|postgresql):$/.test(parsed.protocol)) throw new Error("SUPABASE_DATABASE_URL must use a postgres:// or postgresql:// URL.");
+    if (!/^(postgres|postgresql):$/.test(parsed.protocol)) throw new Error("DATABASE_URL must use a postgres:// or postgresql:// URL.");
     return value;
   } catch {
-    throw new Error("SUPABASE_DATABASE_URL must be a valid postgres:// or postgresql:// connection string.");
+    throw new Error("DATABASE_URL must be a valid postgres:// or postgresql:// connection string.");
   }
 }
 
@@ -21,12 +23,18 @@ const idIndex = args.indexOf("--id");
 const requestedId = idIndex >= 0 ? String(args[idIndex + 1] || "").trim().toUpperCase() : null;
 const allParticipants = args.includes("--all-participants");
 
-if (!url) throw new Error("SUPABASE_DATABASE_URL is required in .env.local");
+if (!url) throw new Error("DATABASE_URL is required in .env.local");
 if (!password || password.length < 12 || password.length > 128) throw new Error("Set NEW_PASSWORD to a value between 12 and 128 characters");
 if ((!requestedId && !allParticipants) || (requestedId && allParticipants)) throw new Error("Use either --id HOST-01/CA-1001 or --all-participants");
 if (requestedId && !/^(HOST-\d{2}|CA-\d{4})$/.test(requestedId)) throw new Error("Invalid account ID");
 
-const sql = postgres(url, { max: 1, prepare: false, ssl: process.env.SUPABASE_DB_SSL === "false" ? false : "require" });
+const sslEnabled =
+  (process.env.DATABASE_SSL ?? process.env.SUPABASE_DB_SSL) !== "false";
+const sql = postgres(url, {
+  max: 1,
+  prepare: false,
+  ssl: sslEnabled ? "require" : false,
+});
 try {
   const accounts = allParticipants
     ? await sql`SELECT id FROM users WHERE role='participant' ORDER BY id`

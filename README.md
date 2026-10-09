@@ -17,7 +17,7 @@ You have **two main ways** to run this platform:
 Deploy the web app for free on **Vercel** and use **Supabase** for the database:
 
 1. **Database Setup (Supabase)**:
-   - Go to [Supabase](https://supabase.com/), create a free project, and copy your Database Connection String (`SUPABASE_DATABASE_URL`).
+   - Go to [Supabase](https://supabase.com/), create a project, and copy its **Transaction pooler** connection string as `DATABASE_URL`. Use port `6543`; do not use the public API URL or publishable key as a database connection.
    - Run database migrations locally or via terminal:
      ```bash
      npm run db:migrate
@@ -27,8 +27,8 @@ Deploy the web app for free on **Vercel** and use **Supabase** for the database:
    - Go to [Vercel](https://vercel.com/) and click **"Add New" ➔ "Project"**.
    - Import your GitHub repo: `Shivani-Ananya/code-nomics-techX-26`.
    - In **Environment Variables**, add:
-     - `SUPABASE_DATABASE_URL`: Your Supabase database pooler URL.
-     - `SUPABASE_DB_SSL`: `true`
+     - `DATABASE_URL`: Your Supabase transaction-pooler URL (port `6543`).
+     - `DATABASE_SSL`: `true`
      - `DATABASE_POOL_SIZE`: `5`
      - `SESSION_SECRET`: A random secret string (at least 32 characters).
      - `EVENT_HOST_PASSWORD`: Your secret admin host password.
@@ -154,12 +154,14 @@ Use an individual participant ID instead of `--all-participants` to reset only t
 
 ## Required Vercel variables
 
-- `SUPABASE_DATABASE_URL`: Supabase pooler connection string. Use the transaction pooler on port 6543 for serverless functions.
-- `SUPABASE_DB_SSL=true`
+- `DATABASE_URL`: Supabase transaction-pooler connection string. Use port 6543 for Vercel serverless functions. This is a server-only secret.
+- `DATABASE_SSL=true`
 - `DATABASE_POOL_SIZE=5`
 - `SESSION_SECRET`: at least 32 random bytes.
-- `EVENT_HOST_PASSWORD`
-- `JUDGE_QUEUE_ENABLED=true`
+- `EVENT_HOST_PASSWORD`: at least 12 characters; used only when the initial `HOST-01` record is created.
+- `JUDGE_QUEUE_ENABLED=true`: enable only after a judge worker connected to the same database is healthy.
+
+`SUPABASE_DATABASE_URL` and `SUPABASE_DB_SSL` remain accepted as legacy aliases, but new deployments should use the canonical names above. `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are not database credentials and are not used by the current server-side PostgreSQL data layer.
 
 Run `npm run db:migrate` from a trusted machine before the first deployment, then import the repository in Vercel. `vercel.json` selects Next.js and the normal build command.
 

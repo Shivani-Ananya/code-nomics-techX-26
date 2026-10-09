@@ -1,20 +1,9 @@
--- Migration 0003: Remove Supabase Row Level Security (not needed / blocks local Postgres)
--- Also adds marketplace_items table for the real marketplace
-ALTER TABLE users DISABLE ROW LEVEL SECURITY;
-ALTER TABLE rounds DISABLE ROW LEVEL SECURITY;
-ALTER TABLE participants DISABLE ROW LEVEL SECURITY;
-ALTER TABLE quiz_questions DISABLE ROW LEVEL SECURITY;
-ALTER TABLE quiz_answers DISABLE ROW LEVEL SECURITY;
-ALTER TABLE coding_questions DISABLE ROW LEVEL SECURITY;
-ALTER TABLE test_cases DISABLE ROW LEVEL SECURITY;
-ALTER TABLE submissions DISABLE ROW LEVEL SECURITY;
-ALTER TABLE submission_jobs DISABLE ROW LEVEL SECURITY;
-ALTER TABLE solved_problems DISABLE ROW LEVEL SECURITY;
-ALTER TABLE coding_question_scores DISABLE ROW LEVEL SECURITY;
-ALTER TABLE help_purchases DISABLE ROW LEVEL SECURITY;
-ALTER TABLE coin_transactions DISABLE ROW LEVEL SECURITY;
-ALTER TABLE login_rate_limits DISABLE ROW LEVEL SECURITY;
-ALTER TABLE score_adjustments DISABLE ROW LEVEL SECURITY;
+-- Shared schema additions used by both Supabase and local PostgreSQL.
+--
+-- Keep Row Level Security enabled. The web application and judge worker use a
+-- trusted server-side PostgreSQL connection, while Supabase public roles must
+-- not be able to access event data directly. Local PostgreSQL table owners
+-- bypass RLS, so the offline Docker deployment remains functional.
 
 -- Add run_output column to submissions for storing sample-run results
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS run_output text;
