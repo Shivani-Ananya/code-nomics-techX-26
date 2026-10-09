@@ -10,7 +10,38 @@ validateQuestionBank();
 
 export { db };
 
+let securitySchemaReady: Promise<void> | null = null;
+
+function ensureSecuritySchema() {
+  if (!securitySchemaReady) {
+    const database = db();
+    securitySchemaReady = (async () => {
+      await database`ALTER TABLE participants
+        ADD COLUMN IF NOT EXISTS security_violation_count integer NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS security_last_violation_at bigint,
+        ADD COLUMN IF NOT EXISTS security_last_violation_reason text,
+        ADD COLUMN IF NOT EXISTS security_disqualified_at bigint`;
+      await database`CREATE TABLE IF NOT EXISTS exam_violations (
+        id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        client_event_id text NOT NULL UNIQUE,
+        participant_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        round_id text NOT NULL CHECK (round_id IN ('round1', 'round2')),
+        reason text NOT NULL,
+        occurred_at bigint NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )`;
+      await database`CREATE INDEX IF NOT EXISTS idx_exam_violations_participant_time ON exam_violations (participant_id, occurred_at DESC)`;
+      await database`ALTER TABLE exam_violations ENABLE ROW LEVEL SECURITY`;
+    })().catch((error) => {
+      securitySchemaReady = null;
+      throw error;
+    });
+  }
+  return securitySchemaReady;
+}
+
 export async function ensureSeeded() {
+  await ensureSecuritySchema();
   const database = db();
   await database.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtext('code-auction-seed'))`;
@@ -91,7 +122,16 @@ export async function ensureSeeded() {
           (row, index) => row.id === index + 1 && row.title === titles[index],
         ),
     );
-    if ((codingRows.length === 0 || isLegacyCodingBank) && codingActivity === 0) {
+    if (isLegacyCodingBank && codingActivity > 0) {
+      await tx`DELETE FROM submissions`;
+      await tx`DELETE FROM solved_problems`;
+      await tx`DELETE FROM coding_question_scores`;
+      await tx`DELETE FROM help_purchases`;
+      await tx`DELETE FROM coin_transactions WHERE type='help_purchase'`;
+      await tx`UPDATE participants SET coins=COALESCE((SELECT sum(amount)::int FROM coin_transactions WHERE participant_id=participants.user_id AND type='quiz_award'), 0), coding_score=0, language=NULL, current_question=1, solved=0, helps_used=0, completion_time=NULL, coding_submitted_at=NULL, status='waiting'`;
+      await tx`UPDATE rounds SET status='waiting', started_at=NULL, paused_at=NULL, accumulated_pause_seconds=0, results_published=false, updated_at=${now} WHERE id='round2'`;
+    }
+    if (codingRows.length === 0 || isLegacyCodingBank) {
       await tx`DELETE FROM coding_questions`;
       const codingQuestionRows = codingQuestions.map((question) => ({
         id: question.id,
