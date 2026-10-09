@@ -98,6 +98,12 @@ Run and Submit both use the durable PostgreSQL queue; web requests never start c
 
 Participants first choose **Run**. The console displays real stdout, stderr, timeout, exit status, and sample comparison. A scored **Submit** is accepted only after that exact source code has run successfully. During hidden judging, the UI shows how many tests have passed and how many have been processed. Partial points are stored as the best score for each question, so retries cannot reduce a score or farm duplicate points.
 
+### Event question structure
+
+Round 1 lasts 30 minutes and contains 40 unique multiple-choice questions: 20 easy, 15 medium, and 5 hard. Round 2 lasts 120 minutes and contains five progressively harder coding problems worth 400, 500, 700, 900, and 1100 points. The checked-in question-bank validator rejects duplicate prompts, duplicate options, duplicate test inputs, invalid answer indexes, non-sequential coding IDs, and incorrect difficulty rewards before deployment.
+
+Run `npm run questions:validate` whenever the built-in question bank is edited.
+
 ## Local web app
 
 For source development without the full Docker stack, use Node.js 22 and PostgreSQL.
