@@ -324,6 +324,19 @@ async function recordSecurityViolation(request: Request, body: Body) {
   const now = Date.now();
   let notice: Row = {};
   await database.begin(async (tx) => {
+    const [round] = await tx<Row[]>`SELECT * FROM rounds WHERE id=${roundId}`;
+    if (
+      !round ||
+      round.status !== "active" ||
+      remaining({
+        status: String(round.status),
+        duration_seconds: Number(round.duration_seconds),
+        started_at: Number(round.started_at),
+        paused_at: round.paused_at ? Number(round.paused_at) : null,
+        accumulated_pause_seconds: Number(round.accumulated_pause_seconds),
+      }) <= 0
+    )
+      throw new Error("Exam security is not active");
     const [user] =
       await tx`SELECT u.locked, u.disqualified, p.security_violation_count, p.security_last_violation_at FROM users u JOIN participants p ON p.user_id=u.id WHERE u.id=${session.id} AND u.role='participant' FOR UPDATE OF u, p`;
     if (!user) throw new Error("Participant not found");
@@ -928,6 +941,7 @@ export async function POST(request: Request) {
       "Question difficulty or points are invalid",
       "Each question needs input/output formats and 1 to 20 test cases",
       "A test case is too large",
+      "Exam security is not active",
     ]);
     const databaseError = serviceError(error);
     if (databaseError !== "Event service unavailable")
