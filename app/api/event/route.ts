@@ -25,6 +25,137 @@ const json = (data: unknown, status = 200, headers?: HeadersInit) => {
 const queueEnabled = () => process.env.JUDGE_QUEUE_ENABLED !== "false";
 const LOGIN_WINDOW_MS = 10 * 60 * 1000;
 const LOGIN_BLOCK_MS = 15 * 60 * 1000;
+const SHARED_CACHE_TTL_MS = 10_000;
+const DATABASE_OPERATION_TIMEOUT_MS = Number(
+  process.env.DATABASE_OPERATION_TIMEOUT_MS || 7_500,
+);
+
+type Trace = {
+  id: string;
+  action: string;
+  startedAt: number;
+  queries: { name: string; durationMs: number }[];
+};
+
+type SharedEventData = {
+  questionCount: number;
+  quiz: Row[];
+  problems: Row[];
+};
+
+let sharedEventCache:
+  | { expiresAt: number; value: SharedEventData }
+  | undefined;
+let sharedEventLoad: Promise<SharedEventData> | undefined;
+
+let roundsCache:
+  | { expiresAt: number; value: Row[] }
+  | undefined;
+let roundsLoad: Promise<Row[]> | undefined;
+
+// Cache user role/locked/disqualified status for 30s per session — avoids a DB hit on every POST
+const userRoleCache = new Map<string, { expiresAt: number; role: string; locked: boolean; disqualified: boolean }>();
+
+
+function createTrace(action: string): Trace {
+  return {
+    id: crypto.randomUUID(),
+    action,
+    startedAt: performance.now(),
+    queries: [],
+  };
+}
+
+async function timed<T>(trace: Trace, name: string, operation: () => Promise<T>) {
+  const startedAt = performance.now();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Database operation timed out: ${name}`)),
+          DATABASE_OPERATION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    trace.queries.push({
+      name,
+      durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+    });
+  }
+}
+
+function finishTrace(trace: Trace, status: number) {
+  const durationMs = Math.round((performance.now() - trace.startedAt) * 10) / 10;
+  if (
+    process.env.PERF_LOG_ALL === "true" ||
+    durationMs >= Number(process.env.PERF_SLOW_REQUEST_MS || 500)
+  )
+    console.info(
+      JSON.stringify({
+        type: "api-performance",
+        requestId: trace.id,
+        action: trace.action,
+        status,
+        durationMs,
+        queries: trace.queries,
+      }),
+    );
+}
+
+function invalidateSharedEventCache() {
+  sharedEventCache = undefined;
+  sharedEventLoad = undefined;
+  roundsCache = undefined;
+  roundsLoad = undefined;
+  userRoleCache.clear();
+}
+
+async function sharedEventData(database: ReturnType<typeof db>, trace: Trace) {
+  const now = Date.now();
+  if (sharedEventCache && sharedEventCache.expiresAt > now)
+    return sharedEventCache.value;
+  if (sharedEventLoad) return sharedEventLoad;
+  sharedEventLoad = (async () => {
+    const [quiz, problems] = await Promise.all([
+      timed(trace, "shared.quiz", () =>
+        database<Row[]>`SELECT id, category, difficulty, prompt, options_json AS options, coin_value AS "coinValue" FROM quiz_questions ORDER BY id`,
+      ),
+      timed(trace, "shared.problems", () =>
+        database<Row[]>`SELECT id, title, difficulty, points, statement, input_format AS "inputFormat", output_format AS "outputFormat", sample_input AS "sampleInput", sample_output AS "sampleOutput" FROM coding_questions ORDER BY id`,
+      ),
+    ]);
+    const value = { questionCount: problems.length, quiz, problems };
+    sharedEventCache = { expiresAt: Date.now() + SHARED_CACHE_TTL_MS, value };
+    return value;
+  })().finally(() => {
+    sharedEventLoad = undefined;
+  });
+  return sharedEventLoad;
+}
+
+function formatRounds(rounds: Row[]) {
+  return Object.fromEntries(
+    rounds.map((round) => [
+      round.id,
+      {
+        ...round,
+        started_at: round.started_at ? Number(round.started_at) : null,
+        paused_at: round.paused_at ? Number(round.paused_at) : null,
+        remainingSeconds: remaining({
+          status: String(round.status),
+          duration_seconds: Number(round.duration_seconds),
+          started_at: round.started_at ? Number(round.started_at) : null,
+          paused_at: round.paused_at ? Number(round.paused_at) : null,
+          accumulated_pause_seconds: Number(round.accumulated_pause_seconds),
+        }),
+      },
+    ]),
+  );
+}
 
 async function loginClientKey(request: Request, id: string) {
   const address =
@@ -55,7 +186,7 @@ async function recordLoginFailure(key: string) {
     ON CONFLICT (client_key) DO UPDATE SET failed_count=excluded.failed_count, first_failed_at=excluded.first_failed_at, blocked_until=excluded.blocked_until, updated_at=excluded.updated_at`;
 }
 
-async function snapshot(request: Request) {
+async function legacySnapshot(request: Request) {
   const session = await readSession(request);
   if (!session) return json({ error: "Authentication required" }, 401);
   const database = db();
@@ -139,17 +270,469 @@ async function snapshot(request: Request) {
   });
 }
 
+async function loadLeaderboard(database: ReturnType<typeof db>, trace: Trace) {
+  return timed(trace, "snapshot.leaderboard", () =>
+    database<Row[]>`SELECT u.id, u.name, u.college, p.coins, p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore", p.language, p.current_question AS "currentQuestion", p.solved, p.helps_used AS "helpsUsed", p.completion_time AS "completionTime", p.status, p.last_seen::float8 AS "lastSeen", p.security_violation_count AS "securityViolationCount", p.security_last_violation_at::float8 AS "securityLastViolationAt", p.security_last_violation_reason AS "securityLastViolationReason", u.locked, u.disqualified FROM participants p JOIN users u ON u.id=p.user_id ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC, COALESCE(p.completion_time, 9999999999999) ASC, u.id ASC`,
+  );
+}
+
+async function loadRounds(database: ReturnType<typeof db>, trace: Trace) {
+  const now = Date.now();
+  if (roundsCache && roundsCache.expiresAt > now) return roundsCache.value;
+  if (roundsCache) {
+    if (!roundsLoad) {
+      roundsLoad = timed(trace, "snapshot.rounds-refresh", () =>
+        database<Row[]>`SELECT * FROM rounds ORDER BY id`,
+      )
+        .then((rows) => {
+          roundsCache = {
+            expiresAt: Date.now() + 3_000,
+            value: rows,
+          };
+          return rows;
+        })
+        .catch((error) => {
+          roundsCache = {
+            expiresAt: Date.now() + 1_000,
+            value: roundsCache!.value,
+          };
+          console.error(
+            JSON.stringify({
+              type: "api-error",
+              action: "rounds-cache-refresh",
+              error: error instanceof Error ? error.message : "Unknown error",
+            }),
+          );
+          return roundsCache.value;
+        })
+        .finally(() => {
+          roundsLoad = undefined;
+        });
+    }
+    return roundsCache.value;
+  }
+  if (roundsLoad) return roundsLoad;
+  roundsLoad = timed(trace, "snapshot.rounds", () =>
+    database<Row[]>`SELECT * FROM rounds ORDER BY id`,
+  ).then((rows) => {
+    roundsCache = { expiresAt: Date.now() + 3_000, value: rows };
+    return rows;
+  }).finally(() => {
+    roundsLoad = undefined;
+  });
+  return roundsLoad;
+}
+
+
+async function loadParticipantBundle(
+  database: ReturnType<typeof db>,
+  trace: Trace,
+  participantId: string,
+) {
+  const [bundle] = await timed(trace, "snapshot.participant-bundle", () =>
+    database<Row[]>`
+      WITH touched AS (
+        UPDATE participants
+        SET last_seen=${Date.now()}, status=CASE WHEN status='waiting' THEN status ELSE 'online' END
+        WHERE user_id=${participantId}
+        RETURNING *
+      )
+      SELECT
+        jsonb_build_object(
+          'id', u.id,
+          'name', u.name,
+          'college', u.college,
+          'locked', u.locked,
+          'disqualified', u.disqualified,
+          'quizSubmittedAt', p.quiz_submitted_at,
+          'quizCorrect', p.quiz_correct,
+          'coins', p.coins,
+          'codingScore', p.coding_score,
+          'language', p.language,
+          'currentQuestion', p.current_question,
+          'solved', p.solved,
+          'helpsUsed', p.helps_used,
+          'completionTime', p.completion_time,
+          'codingSubmittedAt', p.coding_submitted_at,
+          'status', p.status,
+          'lastSeen', p.last_seen,
+          'securityViolationCount', p.security_violation_count,
+          'securityLastViolationAt', p.security_last_violation_at,
+          'securityLastViolationReason', p.security_last_violation_reason
+        ) AS participant,
+        (
+          SELECT ranked.position
+          FROM (
+            SELECT user_id, row_number() OVER (
+              ORDER BY solved DESC, coding_score DESC, helps_used ASC,
+                COALESCE(completion_time, 9999999999999) ASC, user_id ASC
+            )::int AS position
+            FROM participants
+          ) ranked
+          WHERE ranked.user_id=${participantId}
+        ) AS "participantRank",
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'questionId', a.question_id,
+            'answerIndex', a.answer_index
+          ) ORDER BY a.question_id)
+          FROM quiz_answers a
+          WHERE a.participant_id=${participantId}
+        ), '[]'::jsonb) AS answers,
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'id', hp.id,
+            'questionId', hp.question_id,
+            'kind', hp.kind,
+            'cost', hp.cost,
+            'content', hp.content,
+            'createdAt', hp.created_at
+          ) ORDER BY hp.created_at)
+          FROM help_purchases hp
+          WHERE hp.participant_id=${participantId}
+        ), '[]'::jsonb) AS purchases,
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'questionId', cqs.question_id,
+            'bestPassedCount', cqs.best_passed_count,
+            'totalTests', cqs.total_tests,
+            'pointsAwarded', cqs.points_awarded
+          ) ORDER BY cqs.question_id)
+          FROM coding_question_scores cqs
+          WHERE cqs.participant_id=${participantId}
+        ), '[]'::jsonb) AS "questionScores",
+        (
+          SELECT to_jsonb(latest_submission)
+          FROM (
+            SELECT j.id, j.question_id AS "questionId", j.status,
+              COALESCE((j.result_json->>'passed')::int, s.passed_count) AS "passedCount",
+              COALESCE((j.result_json->>'processed')::int, CASE WHEN j.status='completed' THEN (j.result_json->>'total')::int ELSE 0 END, 0) AS "processedTests",
+              s.verdict, j.last_error AS "lastError",
+              COALESCE((j.result_json->>'total')::int, (SELECT count(*)::int FROM test_cases WHERE question_id=j.question_id)) AS "totalTests",
+              COALESCE((j.result_json->>'score')::int, 0) AS "pointsAwarded",
+              EXTRACT(EPOCH FROM j.created_at)*1000 AS "createdAt",
+              s.completed_at::float8 AS "completedAt"
+            FROM submission_jobs j
+            JOIN submissions s ON s.id=j.submission_id
+            WHERE j.participant_id=${participantId} AND j.mode='submit'
+            ORDER BY j.created_at DESC
+            LIMIT 1
+          ) latest_submission
+        ) AS "latestSubmission",
+        (
+          SELECT to_jsonb(latest_run)
+          FROM (
+            SELECT j.id, j.question_id AS "questionId", j.status,
+              j.last_error AS "lastError",
+              COALESCE(j.result_json->>'stdout', '') AS stdout,
+              COALESCE(j.result_json->>'stderr', '') AS stderr,
+              COALESCE((j.result_json->>'exitCode')::int, 0) AS "exitCode",
+              COALESCE((j.result_json->>'elapsedMs')::int, 0) AS "elapsedMs",
+              COALESCE((j.result_json->>'timedOut')::boolean, false) AS "timedOut",
+              COALESCE((j.result_json->>'samplePassed')::boolean, false) AS "samplePassed",
+              COALESCE((j.result_json->>'executionOk')::boolean, false) AS "executionOk",
+              COALESCE(j.result_json->>'expectedOutput', '') AS "expectedOutput",
+              EXTRACT(EPOCH FROM j.created_at)*1000 AS "createdAt"
+            FROM submission_jobs j
+            WHERE j.participant_id=${participantId} AND j.mode='run'
+            ORDER BY j.created_at DESC
+            LIMIT 1
+          ) latest_run
+        ) AS "latestRun",
+        (SELECT count(*)::int FROM submission_jobs WHERE status IN ('queued','running')) AS "totalQueued",
+        (
+          SELECT (count(*) + 1)::int
+          FROM submission_jobs
+          WHERE status='queued' AND created_at < (
+            SELECT created_at FROM submission_jobs
+            WHERE status='queued' AND participant_id=${participantId}
+            ORDER BY created_at LIMIT 1
+          )
+        ) AS "myQueuePosition"
+      FROM touched p
+      JOIN users u ON u.id=p.user_id
+    `,
+  );
+  return bundle;
+}
+
+async function loadParticipantLive(
+  database: ReturnType<typeof db>,
+  trace: Trace,
+  participantId: string,
+  includeJudgeState: boolean,
+) {
+  if (!includeJudgeState) {
+    const [bundle] = await timed(trace, "snapshot.participant-live", () =>
+      database<Row[]>`
+        SELECT jsonb_build_object(
+          'id', u.id,
+          'name', u.name,
+          'college', u.college,
+          'locked', u.locked,
+          'disqualified', u.disqualified,
+          'quizSubmittedAt', p.quiz_submitted_at,
+          'quizCorrect', p.quiz_correct,
+          'coins', p.coins,
+          'codingScore', p.coding_score,
+          'language', p.language,
+          'currentQuestion', p.current_question,
+          'solved', p.solved,
+          'helpsUsed', p.helps_used,
+          'completionTime', p.completion_time,
+          'codingSubmittedAt', p.coding_submitted_at,
+          'status', p.status,
+          'lastSeen', p.last_seen,
+          'securityViolationCount', p.security_violation_count,
+          'securityLastViolationAt', p.security_last_violation_at,
+          'securityLastViolationReason', p.security_last_violation_reason
+        ) AS participant,
+        (
+          SELECT ranked.position
+          FROM (
+            SELECT user_id, row_number() OVER (
+              ORDER BY solved DESC, coding_score DESC, helps_used ASC,
+                COALESCE(completion_time, 9999999999999) ASC, user_id ASC
+            )::int AS position
+            FROM participants
+          ) ranked
+          WHERE ranked.user_id=${participantId}
+        ) AS "participantRank"
+        FROM participants p
+        JOIN users u ON u.id=p.user_id
+        WHERE p.user_id=${participantId}
+      `,
+    );
+    if (bundle?.participant) {
+      const participant = bundle.participant as Row;
+      userRoleCache.set(participantId, {
+        expiresAt: Date.now() + 30_000,
+        role: "participant",
+        locked: Boolean(participant.locked),
+        disqualified: Boolean(participant.disqualified),
+      });
+    }
+    return {
+      ...bundle,
+      questionScores: [],
+      latestSubmission: null,
+      latestRun: null,
+    };
+  }
+
+  const [bundle] = await timed(trace, "snapshot.participant-live", () =>
+    database<Row[]>`
+      SELECT
+        jsonb_build_object(
+          'id', u.id,
+          'name', u.name,
+          'college', u.college,
+          'locked', u.locked,
+          'disqualified', u.disqualified,
+          'quizSubmittedAt', p.quiz_submitted_at,
+          'quizCorrect', p.quiz_correct,
+          'coins', p.coins,
+          'codingScore', p.coding_score,
+          'language', p.language,
+          'currentQuestion', p.current_question,
+          'solved', p.solved,
+          'helpsUsed', p.helps_used,
+          'completionTime', p.completion_time,
+          'codingSubmittedAt', p.coding_submitted_at,
+          'status', p.status,
+          'lastSeen', p.last_seen,
+          'securityViolationCount', p.security_violation_count,
+          'securityLastViolationAt', p.security_last_violation_at,
+          'securityLastViolationReason', p.security_last_violation_reason
+        ) AS participant,
+        (
+          SELECT ranked.position
+          FROM (
+            SELECT user_id, row_number() OVER (
+              ORDER BY solved DESC, coding_score DESC, helps_used ASC,
+                COALESCE(completion_time, 9999999999999) ASC, user_id ASC
+            )::int AS position
+            FROM participants
+          ) ranked
+          WHERE ranked.user_id=${participantId}
+        ) AS "participantRank",
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'questionId', cqs.question_id,
+            'bestPassedCount', cqs.best_passed_count,
+            'totalTests', cqs.total_tests,
+            'pointsAwarded', cqs.points_awarded
+          ) ORDER BY cqs.question_id)
+          FROM coding_question_scores cqs
+          WHERE cqs.participant_id=${participantId}
+        ), '[]'::jsonb) AS "questionScores",
+        (
+          SELECT to_jsonb(latest_submission)
+          FROM (
+            SELECT j.id, j.question_id AS "questionId", j.status,
+              COALESCE((j.result_json->>'passed')::int, s.passed_count) AS "passedCount",
+              COALESCE((j.result_json->>'processed')::int, 0) AS "processedTests",
+              s.verdict, j.last_error AS "lastError",
+              COALESCE((j.result_json->>'total')::int, 0) AS "totalTests",
+              COALESCE((j.result_json->>'score')::int, 0) AS "pointsAwarded",
+              EXTRACT(EPOCH FROM j.created_at)*1000 AS "createdAt",
+              s.completed_at::float8 AS "completedAt"
+            FROM submission_jobs j
+            JOIN submissions s ON s.id=j.submission_id
+            WHERE j.participant_id=${participantId} AND j.mode='submit'
+            ORDER BY j.created_at DESC
+            LIMIT 1
+          ) latest_submission
+        ) AS "latestSubmission",
+        (
+          SELECT to_jsonb(latest_run)
+          FROM (
+            SELECT j.id, j.question_id AS "questionId", j.status,
+              j.last_error AS "lastError",
+              COALESCE(j.result_json->>'stdout', '') AS stdout,
+              COALESCE(j.result_json->>'stderr', '') AS stderr,
+              COALESCE((j.result_json->>'exitCode')::int, 0) AS "exitCode",
+              COALESCE((j.result_json->>'elapsedMs')::int, 0) AS "elapsedMs",
+              COALESCE((j.result_json->>'timedOut')::boolean, false) AS "timedOut",
+              COALESCE((j.result_json->>'samplePassed')::boolean, false) AS "samplePassed",
+              COALESCE((j.result_json->>'executionOk')::boolean, false) AS "executionOk",
+              COALESCE(j.result_json->>'expectedOutput', '') AS "expectedOutput",
+              EXTRACT(EPOCH FROM j.created_at)*1000 AS "createdAt"
+            FROM submission_jobs j
+            WHERE j.participant_id=${participantId} AND j.mode='run'
+            ORDER BY j.created_at DESC
+            LIMIT 1
+          ) latest_run
+        ) AS "latestRun"
+      FROM participants p
+      JOIN users u ON u.id=p.user_id
+      WHERE p.user_id=${participantId}
+    `,
+  );
+  if (bundle?.participant) {
+    const participant = bundle.participant as Row;
+    userRoleCache.set(participantId, {
+      expiresAt: Date.now() + 30_000,
+      role: "participant",
+      locked: Boolean(participant.locked),
+      disqualified: Boolean(participant.disqualified),
+    });
+  }
+  return bundle;
+}
+
+async function snapshot(
+  request: Request,
+  liveOnly = false,
+  sharedOnly = false,
+) {
+  if (process.env.SNAPSHOT_LEGACY === "true") return legacySnapshot(request);
+  const trace = createTrace(liveOnly ? "live-snapshot" : "snapshot");
+  let status = 200;
+  try {
+    const session = await readSession(request);
+    if (!session) {
+      status = 401;
+      return json({ error: "Authentication required" }, status);
+    }
+    const database = db();
+    const roundsPromise = loadRounds(database, trace);
+    if (session.role === "host") {
+      const [rounds, leaderboard, shared, queue] = await Promise.all([
+        roundsPromise,
+        loadLeaderboard(database, trace),
+        liveOnly
+          ? Promise.resolve<SharedEventData | null>(null)
+          : sharedEventData(database, trace),
+        timed(trace, "snapshot.queue", () =>
+          database<{ totalQueued: number }[]>`SELECT count(*)::int AS "totalQueued" FROM submission_jobs WHERE status IN ('queued','running')`,
+        ),
+      ]);
+      return json({
+        session,
+        rounds: formatRounds(rounds),
+        leaderboard,
+        ...(shared || {}),
+        serverTime: Date.now(),
+        judgeConfigured: queueEnabled(),
+        totalQueued: queue[0]?.totalQueued || 0,
+      });
+    }
+
+    // Frequent participant timer/event polls only need public round state. The
+    // signed HttpOnly session still authenticates this response, but avoiding a
+    // participant query here keeps 200 idle browsers from continuously reading
+    // private rows. Private state is fetched separately and is never cached.
+    if (sharedOnly) {
+      const rounds = await roundsPromise;
+      return json({
+        session,
+        rounds: formatRounds(rounds),
+        serverTime: Date.now(),
+        judgeConfigured: queueEnabled(),
+      });
+    }
+
+    const rounds = await roundsPromise;
+    const codingRoundActive = rounds.some(
+      (row: Row) => row.id === "round2" && row.status === "active",
+    );
+    const [bundle, shared] = await Promise.all([
+      liveOnly
+        ? loadParticipantLive(database, trace, session.id, codingRoundActive)
+        : loadParticipantBundle(database, trace, session.id),
+      liveOnly
+        ? Promise.resolve<SharedEventData | null>(null)
+        : sharedEventData(database, trace),
+    ]);
+    if (!bundle) {
+      status = 404;
+      return json({ error: "Participant not found" }, status);
+    }
+    return json({
+      session,
+      participant: bundle.participant,
+      rounds: formatRounds(rounds),
+      leaderboard: [],
+      participantRank: Number(bundle.participantRank || 0),
+      ...(shared || {}),
+      answers: liveOnly ? undefined : bundle.answers,
+      purchases: liveOnly ? undefined : bundle.purchases,
+      questionScores: bundle.questionScores,
+      latestSubmission: bundle.latestSubmission || null,
+      latestRun: bundle.latestRun || null,
+      serverTime: Date.now(),
+      judgeConfigured: queueEnabled(),
+      totalQueued: Number(bundle.totalQueued || 0),
+      myQueuePosition: bundle.myQueuePosition
+        ? Number(bundle.myQueuePosition)
+        : null,
+    });
+  } catch (error) {
+    status = 500;
+    throw error;
+  } finally {
+    finishTrace(trace, status);
+  }
+}
+
 async function requireRole(request: Request, role?: "host" | "participant") {
   const session = await readSession(request);
   if (!session || (role && session.role !== role)) return null;
-  const [user] =
-    await db()`SELECT role, locked, disqualified FROM users WHERE id=${session.id}`;
-  return user &&
-    user.role === session.role &&
-    !user.locked &&
-    !user.disqualified
-    ? session
-    : null;
+  const cached = userRoleCache.get(session.id);
+  const now = Date.now();
+  let userRole: string, locked: boolean, disqualified: boolean;
+  if (cached && cached.expiresAt > now) {
+    ({ role: userRole, locked, disqualified } = cached);
+  } else {
+    const [user] = await db()`SELECT role, locked, disqualified FROM users WHERE id=${session.id}`;
+    if (!user) return null;
+    userRole = String(user.role);
+    locked = Boolean(user.locked);
+    disqualified = Boolean(user.disqualified);
+    userRoleCache.set(session.id, { expiresAt: now + 30_000, role: userRole, locked, disqualified });
+  }
+  return userRole === session.role && !locked && !disqualified ? session : null;
 }
 async function login(request: Request, body: Body) {
   await ensureSeeded();
@@ -166,11 +749,16 @@ async function login(request: Request, body: Body) {
   const database = db();
   const [limit] =
     await database`SELECT blocked_until FROM login_rate_limits WHERE client_key=${key}`;
-  if (limit?.blocked_until && Number(limit.blocked_until) > Date.now())
+  const blockedUntil = Number(limit?.blocked_until || 0);
+  if (blockedUntil > Date.now())
     return json(
-      { error: "Too many failed attempts. Try again in 15 minutes." },
+      {
+        error: `Too many failed attempts. Try again in ${Math.max(1, Math.ceil((blockedUntil - Date.now()) / 60_000))} minutes.`,
+      },
       429,
     );
+  if (limit?.blocked_until)
+    await database`DELETE FROM login_rate_limits WHERE client_key=${key}`;
   const [user] =
     role === "host"
       ? await database`SELECT id, role, password_hash, password_salt, locked, disqualified FROM users WHERE id=${normalizedLogin} AND role='host'`
@@ -184,6 +772,10 @@ async function login(request: Request, body: Body) {
     if (user) await recordLoginFailure(key);
     return json({ error: "Invalid credentials or account unavailable" }, 401);
   }
+  // A valid login starts a fresh rate-limit window. Without this cleanup,
+  // earlier typing mistakes remain attached to the host even after a
+  // successful sign-in and can cause an unexpected later lockout.
+  await database`DELETE FROM login_rate_limits WHERE client_key=${key}`;
   if (role === "participant") {
     await database`INSERT INTO participants (user_id, last_seen) VALUES (${user.id}, ${Date.now()}) ON CONFLICT DO NOTHING`;
   }
@@ -295,6 +887,7 @@ async function participantControl(request: Request, body: Body) {
       await database`DELETE FROM users WHERE id=${target} AND role='participant' RETURNING id`;
     if (!removed.length) return json({ error: "Participant not found" }, 404);
   } else return json({ error: "Invalid participant control" }, 400);
+  userRoleCache.delete(target);
   return snapshot(request);
 }
 
@@ -387,6 +980,7 @@ async function recordSecurityViolation(request: Request, body: Body) {
     };
   });
 
+  if (notice.disqualified) userRoleCache.delete(session.id);
   const state = await (await snapshot(request)).json();
   return json({ ...state, securityNotice: notice });
 }
@@ -538,6 +1132,7 @@ async function addQuestions(request: Request, body: Body) {
     }
     await tx`UPDATE participants SET current_question=${nextId}, completion_time=NULL WHERE completion_time IS NOT NULL OR solved >= ${oldCount}`;
   });
+  invalidateSharedEventCache();
   return json(
     { createdQuestionIds: ids, state: await (await snapshot(request)).json() },
     201,
@@ -576,34 +1171,51 @@ async function manualScore(request: Request, body: Body) {
 }
 
 async function answerQuestion(request: Request, body: Body) {
-  const session = await requireRole(request, "participant");
-  if (!session)
-    return json({ error: "Participant authorization required" }, 403);
-  const questionId = Number(body.questionId),
-    answerIndex = Number(body.answerIndex),
-    database = db();
-  const [round] = await database<Row[]>`SELECT * FROM rounds WHERE id='round1'`;
-  if (
-    !round ||
-    round.status !== "active" ||
-    remaining({
-      status: String(round.status),
-      duration_seconds: Number(round.duration_seconds),
-      started_at: Number(round.started_at),
-      paused_at: round.paused_at ? Number(round.paused_at) : null,
-      accumulated_pause_seconds: Number(round.accumulated_pause_seconds),
-    }) <= 0
-  )
-    return json({ error: "Quiz is not active" }, 409);
-  if (
-    !Number.isInteger(questionId) ||
-    !Number.isInteger(answerIndex) ||
-    answerIndex < 0 ||
-    answerIndex > 3
-  )
-    return json({ error: "Invalid answer" }, 400);
-  await database`INSERT INTO quiz_answers (participant_id, question_id, answer_index, answered_at) VALUES (${session.id}, ${questionId}, ${answerIndex}, ${Date.now()}) ON CONFLICT (participant_id, question_id) DO UPDATE SET answer_index=excluded.answer_index, answered_at=excluded.answered_at`;
-  return json({ ok: true });
+  const trace = createTrace("answer");
+  let status = 200;
+  try {
+    const session = await timed(trace, "answer.authorization", () =>
+      requireRole(request, "participant"),
+    );
+    if (!session) {
+      status = 403;
+      return json({ error: "Participant authorization required" }, status);
+    }
+    const questionId = Number(body.questionId),
+      answerIndex = Number(body.answerIndex),
+      database = db();
+    if (
+      !Number.isInteger(questionId) ||
+      !Number.isInteger(answerIndex) ||
+      answerIndex < 0 ||
+      answerIndex > 3
+    ) {
+      status = 400;
+      return json({ error: "Invalid answer" }, status);
+    }
+    const rounds = await loadRounds(database, trace);
+    const round = rounds.find((row: Row) => row.id === "round1");
+    if (
+      !round ||
+      round.status !== "active" ||
+      remaining({
+        status: String(round.status),
+        duration_seconds: Number(round.duration_seconds),
+        started_at: Number(round.started_at),
+        paused_at: round.paused_at ? Number(round.paused_at) : null,
+        accumulated_pause_seconds: Number(round.accumulated_pause_seconds),
+      }) <= 0
+    ) {
+      status = 409;
+      return json({ error: "Quiz is not active" }, status);
+    }
+    await timed(trace, "answer.upsert", () =>
+      database`INSERT INTO quiz_answers (participant_id, question_id, answer_index, answered_at) VALUES (${session.id}, ${questionId}, ${answerIndex}, ${Date.now()}) ON CONFLICT (participant_id, question_id) DO UPDATE SET answer_index=excluded.answer_index, answered_at=excluded.answered_at`,
+    );
+    return json({ ok: true });
+  } finally {
+    finishTrace(trace, status);
+  }
 }
 
 async function submitQuiz(request: Request) {
@@ -885,9 +1497,17 @@ function serviceError(error: unknown) {
 export async function GET(request: Request) {
   try {
     await ensureSeeded();
-    return await snapshot(request);
+    const view = new URL(request.url).searchParams.get("view");
+    const liveOnly = view === "live" || view === "private";
+    return await snapshot(request, liveOnly, view === "live");
   } catch (error) {
-    console.error(error);
+    console.error(
+      JSON.stringify({
+        type: "api-error",
+        action: "snapshot",
+        error: error instanceof Error ? error.message : "Unknown error",
+      }),
+    );
     return json({ error: serviceError(error) }, 503);
   }
 }
@@ -925,7 +1545,13 @@ export async function POST(request: Request) {
     if (action === "finish-coding") return await finishCoding(request);
     return json({ error: "Unknown action" }, 400);
   } catch (error) {
-    console.error(error);
+    console.error(
+      JSON.stringify({
+        type: "api-error",
+        action: String(body.action || "unknown"),
+        error: error instanceof Error ? error.message : "Unknown error",
+      }),
+    );
     const message = error instanceof Error ? error.message : "";
     const safeMessages = new Set([
       "Participant not found",

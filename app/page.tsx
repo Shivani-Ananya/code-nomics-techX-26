@@ -70,6 +70,7 @@ type EventState = {
   totalQueued?: number;
   myQueuePosition?: number | null;
   questionCount?: number;
+  participantRank?: number;
   judgeConfigured?: boolean;
   serverTime: number;
 };
@@ -84,10 +85,11 @@ const request = async (body?: Record<string, unknown>) => {
     body
       ? {
           method: "POST",
+          credentials: "same-origin",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         }
-      : { cache: "no-store" },
+      : { cache: "no-store", credentials: "same-origin" },
   );
   const text = await response.text();
   let data: any = {};
@@ -409,6 +411,47 @@ export default function Home() {
         setError((e as Error).message);
     }
   }, []);
+  const refreshLive = useCallback(async (privateState = false) => {
+    try {
+      const response = await fetch(
+        `/api/event?view=${privateState ? "private" : "live"}`,
+        {
+        cache: "no-store",
+        credentials: "same-origin",
+        },
+      );
+      const live = await response.json();
+      if (response.status === 401) {
+        setState(null);
+        setError("Your session expired. Please sign in again.");
+        return;
+      }
+      if (!response.ok) throw new Error(live.error || "Live update failed");
+      setState((current) => {
+        if (!current) return live;
+        const participant = live.participant
+          ? { ...current.participant, ...live.participant }
+          : current.participant;
+        return {
+          ...current,
+          ...live,
+          participant,
+          quiz: current.quiz,
+          answers: current.answers,
+          problems: current.problems,
+          purchases: current.purchases,
+          questionCount: current.questionCount,
+          leaderboard:
+            current.session.role === "host"
+              ? live.leaderboard || current.leaderboard
+              : current.leaderboard,
+        };
+      });
+    } catch (e) {
+      if ((e as Error).message !== "Authentication required")
+        setError((e as Error).message);
+    }
+  }, []);
   useEffect(() => {
     refresh();
   }, [refresh]);
@@ -417,9 +460,6 @@ export default function Home() {
   const round2Status = state?.rounds.round2?.status;
   useEffect(() => {
     if (!sessionRole) return;
-    const participantIsActive =
-      sessionRole === "participant" &&
-      (round1Status === "active" || round2Status === "active");
     const submissionStatus = state?.latestSubmission?.status;
     const runStatus = state?.latestRun?.status;
     const isJudging =
@@ -427,21 +467,29 @@ export default function Home() {
       submissionStatus === "running" ||
       runStatus === "queued" ||
       runStatus === "running";
-    const delay = isJudging
-      ? 1200
-      : sessionRole === "host" || participantIsActive
-        ? 2000
-        : 5000;
-    const timer = setInterval(refresh, delay);
+    const delay = isJudging ? 1500 : sessionRole === "host" ? 3000 : 10000;
+    const timer = setInterval(
+      () => refreshLive(isJudging && sessionRole === "participant"),
+      delay,
+    );
     return () => clearInterval(timer);
   }, [
-    refresh,
+    refreshLive,
     sessionRole,
     round1Status,
     round2Status,
     state?.latestSubmission?.status,
     state?.latestRun?.status,
   ]);
+
+  // Participant-specific scores, flags, and queue details are deliberately
+  // uncached. Refresh them less often while idle; active judging above remains
+  // fast so run/submit feedback is responsive.
+  useEffect(() => {
+    if (sessionRole !== "participant") return;
+    const timer = setInterval(() => refreshLive(true), 60_000);
+    return () => clearInterval(timer);
+  }, [refreshLive, sessionRole]);
 
   const login = async () => {
     setLoading(true);
@@ -571,7 +619,7 @@ export default function Home() {
                   : "JOIN EVENT"}
             </button>
             <small className="secure">
-              <Lock /> Signed HttpOnly session Â· Server-authorized actions
+              <Lock /> Signed HttpOnly session · Server-authorized actions
             </small>
           </div>
         </section>
@@ -621,7 +669,7 @@ export default function Home() {
         text={
           r2.results_published
             ? "Your final rank is #" +
-              (state.leaderboard.findIndex((x) => x.id === p.id) + 1) +
+              (state.participantRank || 0) +
               "."
             : "The host will publish the final results shortly."
         }
@@ -677,7 +725,7 @@ function Waiting({ state }: { state: EventState }) {
           </div>
           <div>
             <small>CURRENT RANK</small>
-            <b>#{state.leaderboard.findIndex((x) => x.id === p.id) + 1}</b>
+            <b>#{state.participantRank || 0}</b>
           </div>
         </div>
       )}
@@ -997,7 +1045,7 @@ function Coding({
       );
       setOutput(
         saved
-          ? `Best result: ${saved.bestPassedCount}/${saved.totalTests} tests Â· ${saved.pointsAwarded}/${problem.points} points.`
+          ? `Best result: ${saved.bestPassedCount}/${saved.totalTests} tests · ${saved.pointsAwarded}/${problem.points} points.`
           : "No execution recorded for this question yet.",
       );
       return;
@@ -1103,7 +1151,7 @@ function Coding({
           </span>
           <span>HELP {p.helpsUsed}/3</span>
           <span>
-            RANK #{state.leaderboard.findIndex((x) => x.id === p.id) + 1}
+            RANK #{state.participantRank || 0}
           </span>
           <button onClick={() => setMarket(true)}>
             <ShoppingCart /> HELP MARKETPLACE
@@ -1123,7 +1171,7 @@ function Coding({
             <b>{problem.points} PTS</b>
             {score && (
               <b className="partial-score">
-                BEST {score.bestPassedCount}/{score.totalTests} Â·{" "}
+                BEST {score.bestPassedCount}/{score.totalTests} ·{" "}
                 {score.pointsAwarded} PTS
               </b>
             )}
@@ -1457,7 +1505,7 @@ function TeamManager({
             <b>CREATED CREDENTIALS</b>
             {created.map((team) => (
               <code key={team.id}>
-                username: {team.name} Â· password: {team.password} Â· internal
+                username: {team.name} · password: {team.password} · internal
                 ID: {team.id}
               </code>
             ))}
@@ -2004,7 +2052,7 @@ function Host({
               <span>
                 <h3>{person.name}</h3>
                 <small>
-                  {person.id} Â· {person.college}
+                  {person.id} · {person.college}
                 </small>
               </span>
             </header>

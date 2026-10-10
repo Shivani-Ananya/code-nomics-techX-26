@@ -10,49 +10,26 @@ validateQuestionBank();
 
 export { db };
 
-let securitySchemaReady: Promise<void> | null = null;
+let databaseSeedReady: Promise<void> | null = null;
 
-function ensureSecuritySchema() {
-  if (!securitySchemaReady) {
-    const database = db();
-    securitySchemaReady = (async () => {
-      await database`ALTER TABLE participants
-        ADD COLUMN IF NOT EXISTS security_violation_count integer NOT NULL DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS security_last_violation_at bigint,
-        ADD COLUMN IF NOT EXISTS security_last_violation_reason text,
-        ADD COLUMN IF NOT EXISTS security_disqualified_at bigint`;
-      await database`CREATE TABLE IF NOT EXISTS exam_violations (
-        id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-        client_event_id text NOT NULL UNIQUE,
-        participant_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        round_id text NOT NULL CHECK (round_id IN ('round1', 'round2')),
-        reason text NOT NULL,
-        occurred_at bigint NOT NULL,
-        created_at timestamptz NOT NULL DEFAULT now()
-      )`;
-      await database`CREATE INDEX IF NOT EXISTS idx_exam_violations_participant_time ON exam_violations (participant_id, occurred_at DESC)`;
-      await database`ALTER TABLE exam_violations ENABLE ROW LEVEL SECURITY`;
-    })().catch((error) => {
-      securitySchemaReady = null;
-      throw error;
-    });
-  }
-  return securitySchemaReady;
-}
-
-export async function ensureSeeded() {
-  await ensureSecuritySchema();
+async function seedDatabase() {
   const database = db();
   await database.begin(async (tx) => {
+    // Disable timeouts for cold-start seeding — inserts many rows against remote Supabase
+    await tx`SET LOCAL statement_timeout = 0`;
+    await tx`SET LOCAL lock_timeout = 60000`;
+    await tx`SET LOCAL idle_in_transaction_session_timeout = 0`;
     await tx`SELECT pg_advisory_xact_lock(hashtext('code-auction-seed'))`;
     const [{ host_count: hostCount }] = await tx<{ host_count: number }[]>`SELECT count(*) FILTER (WHERE role='host')::int AS host_count FROM users`;
     const hostPassword = process.env.EVENT_HOST_PASSWORD;
     if (!hostPassword || hostPassword.length < 12) throw new Error("EVENT_HOST_PASSWORD must contain at least 12 characters");
     const now = Date.now();
+    const hostSalt = randomSalt();
+    const hostHash = await hashPassword(hostPassword, hostSalt);
     if (hostCount === 0) {
-      const hostSalt = randomSalt();
-      const hostHash = await hashPassword(hostPassword, hostSalt);
       await tx`INSERT INTO users (id, role, name, college, password_hash, password_salt, created_at) VALUES ('HOST-01', 'host', 'Host Admin', 'TECHX Madras 26', ${hostHash}, ${hostSalt}, ${now})`;
+    } else {
+      await tx`UPDATE users SET password_hash=${hostHash}, password_salt=${hostSalt} WHERE id='HOST-01'`;
     }
 
     await tx`INSERT INTO rounds (id, status, duration_seconds, updated_at)
@@ -175,6 +152,15 @@ export async function ensureSeeded() {
       )}`;
     }
   });
+}
+
+export function ensureSeeded() {
+  if (!databaseSeedReady)
+    databaseSeedReady = seedDatabase().catch((error) => {
+      databaseSeedReady = null;
+      throw error;
+    });
+  return databaseSeedReady;
 }
 
 export function remaining(round: { status: string; duration_seconds: number; started_at: number | null; paused_at: number | null; accumulated_pause_seconds: number }) {
