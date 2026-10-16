@@ -208,8 +208,29 @@ async function legacySnapshot(request: Request) {
       },
     ]),
   );
-  const leaderboard =
-    await database`SELECT u.id, u.name, u.college, p.coins, p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore", p.language, p.current_question AS "currentQuestion", p.solved, p.helps_used AS "helpsUsed", p.completion_time AS "completionTime", p.status, p.last_seen::float8 AS "lastSeen", p.security_violation_count AS "securityViolationCount", p.security_last_violation_at::float8 AS "securityLastViolationAt", p.security_last_violation_reason AS "securityLastViolationReason", u.locked, u.disqualified FROM participants p JOIN users u ON u.id=p.user_id ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC, COALESCE(p.completion_time, 9999999999999) ASC`;
+  const leaderboard = await database`
+    WITH ranked AS (
+      SELECT p.user_id, row_number() OVER (
+        ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC,
+          COALESCE(p.completion_time, 9999999999999) ASC, p.user_id ASC
+      )::int AS rank
+      FROM participants p
+      JOIN users eligible ON eligible.id=p.user_id
+      WHERE eligible.disqualified=false
+    )
+    SELECT u.id, u.name, u.college, ranked.rank, p.coins,
+      p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore",
+      p.language, p.current_question AS "currentQuestion", p.solved,
+      p.helps_used AS "helpsUsed", p.completion_time AS "completionTime",
+      p.status, p.last_seen::float8 AS "lastSeen",
+      p.security_violation_count AS "securityViolationCount",
+      p.security_last_violation_at::float8 AS "securityLastViolationAt",
+      p.security_last_violation_reason AS "securityLastViolationReason",
+      u.locked, u.disqualified
+    FROM participants p
+    JOIN users u ON u.id=p.user_id
+    LEFT JOIN ranked ON ranked.user_id=p.user_id
+    ORDER BY u.disqualified ASC, ranked.rank ASC NULLS LAST, u.id ASC`;
   const [{ questionCount }] = await database<
     { questionCount: number }[]
   >`SELECT count(*)::int AS "questionCount" FROM coding_questions`;
@@ -272,7 +293,29 @@ async function legacySnapshot(request: Request) {
 
 async function loadLeaderboard(database: ReturnType<typeof db>, trace: Trace) {
   return timed(trace, "snapshot.leaderboard", () =>
-    database<Row[]>`SELECT u.id, u.name, u.college, p.coins, p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore", p.language, p.current_question AS "currentQuestion", p.solved, p.helps_used AS "helpsUsed", p.completion_time AS "completionTime", p.status, p.last_seen::float8 AS "lastSeen", p.security_violation_count AS "securityViolationCount", p.security_last_violation_at::float8 AS "securityLastViolationAt", p.security_last_violation_reason AS "securityLastViolationReason", u.locked, u.disqualified FROM participants p JOIN users u ON u.id=p.user_id ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC, COALESCE(p.completion_time, 9999999999999) ASC, u.id ASC`,
+    database<Row[]>`
+      WITH ranked AS (
+        SELECT p.user_id, row_number() OVER (
+          ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC,
+            COALESCE(p.completion_time, 9999999999999) ASC, p.user_id ASC
+        )::int AS rank
+        FROM participants p
+        JOIN users eligible ON eligible.id=p.user_id
+        WHERE eligible.disqualified=false
+      )
+      SELECT u.id, u.name, u.college, ranked.rank, p.coins,
+        p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore",
+        p.language, p.current_question AS "currentQuestion", p.solved,
+        p.helps_used AS "helpsUsed", p.completion_time AS "completionTime",
+        p.status, p.last_seen::float8 AS "lastSeen",
+        p.security_violation_count AS "securityViolationCount",
+        p.security_last_violation_at::float8 AS "securityLastViolationAt",
+        p.security_last_violation_reason AS "securityLastViolationReason",
+        u.locked, u.disqualified
+      FROM participants p
+      JOIN users u ON u.id=p.user_id
+      LEFT JOIN ranked ON ranked.user_id=p.user_id
+      ORDER BY u.disqualified ASC, ranked.rank ASC NULLS LAST, u.id ASC`,
   );
 }
 
@@ -367,7 +410,9 @@ async function loadParticipantBundle(
               ORDER BY solved DESC, coding_score DESC, helps_used ASC,
                 COALESCE(completion_time, 9999999999999) ASC, user_id ASC
             )::int AS position
-            FROM participants
+            FROM participants rank_participant
+            JOIN users rank_user ON rank_user.id=rank_participant.user_id
+            WHERE rank_user.disqualified=false
           ) ranked
           WHERE ranked.user_id=${participantId}
         ) AS "participantRank",
@@ -494,7 +539,9 @@ async function loadParticipantLive(
               ORDER BY solved DESC, coding_score DESC, helps_used ASC,
                 COALESCE(completion_time, 9999999999999) ASC, user_id ASC
             )::int AS position
-            FROM participants
+            FROM participants rank_participant
+            JOIN users rank_user ON rank_user.id=rank_participant.user_id
+            WHERE rank_user.disqualified=false
           ) ranked
           WHERE ranked.user_id=${participantId}
         ) AS "participantRank"
@@ -552,7 +599,9 @@ async function loadParticipantLive(
               ORDER BY solved DESC, coding_score DESC, helps_used ASC,
                 COALESCE(completion_time, 9999999999999) ASC, user_id ASC
             )::int AS position
-            FROM participants
+            FROM participants rank_participant
+            JOIN users rank_user ON rank_user.id=rank_participant.user_id
+            WHERE rank_user.disqualified=false
           ) ranked
           WHERE ranked.user_id=${participantId}
         ) AS "participantRank",

@@ -458,6 +458,7 @@ export default function Home() {
   const sessionRole = state?.session.role;
   const round1Status = state?.rounds.round1?.status;
   const round2Status = state?.rounds.round2?.status;
+  const resultsPublished = Boolean(state?.rounds.round2?.results_published);
   useEffect(() => {
     if (!sessionRole) return;
     const submissionStatus = state?.latestSubmission?.status;
@@ -490,6 +491,18 @@ export default function Home() {
     const timer = setInterval(() => refreshLive(true), 60_000);
     return () => clearInterval(timer);
   }, [refreshLive, sessionRole]);
+
+  // The shared round poll can announce published results before the slower
+  // private poll updates this participant's final rank. Fetch it immediately
+  // so the result screen never sits on a stale or zero rank.
+  useEffect(() => {
+    if (
+      sessionRole === "participant" &&
+      round2Status === "ended" &&
+      resultsPublished
+    )
+      void refreshLive(true);
+  }, [refreshLive, resultsPublished, round2Status, sessionRole]);
 
   const login = async () => {
     setLoading(true);
@@ -668,9 +681,9 @@ export default function Home() {
         title={r2.results_published ? "Event completed" : "Results locked"}
         text={
           r2.results_published
-            ? "Your final rank is #" +
-              (state.participantRank || 0) +
-              "."
+            ? state.participantRank
+              ? "Your final rank is #" + state.participantRank + "."
+              : "Your final rank is being finalized."
             : "The host will publish the final results shortly."
         }
       />
@@ -725,7 +738,7 @@ function Waiting({ state }: { state: EventState }) {
           </div>
           <div>
             <small>CURRENT RANK</small>
-            <b>#{state.participantRank || 0}</b>
+            <b>{state.participantRank ? `#${state.participantRank}` : "—"}</b>
           </div>
         </div>
       )}
@@ -1151,7 +1164,7 @@ function Coding({
           </span>
           <span>HELP {p.helpsUsed}/3</span>
           <span>
-            RANK #{state.participantRank || 0}
+            RANK {state.participantRank ? `#${state.participantRank}` : "—"}
           </span>
           <button onClick={() => setMarket(true)}>
             <ShoppingCart /> HELP MARKETPLACE
@@ -1960,7 +1973,7 @@ function Host({
           <section className="tablebox">
             <header>
               <div>
-                <h2>Participant teams</h2>
+                <h2>Live leaderboard</h2>
                 <div
                   className="team-filters"
                   aria-label="Filter participant teams"
@@ -2003,9 +2016,7 @@ function Host({
                     key={x.id}
                   >
                     <td>
-                      #
-                      {state.leaderboard.findIndex((team) => team.id === x.id) +
-                        1}
+                      {x.disqualified || !x.rank ? "—" : `#${x.rank}`}
                     </td>
                     <td>
                       <b>{x.name}</b>
