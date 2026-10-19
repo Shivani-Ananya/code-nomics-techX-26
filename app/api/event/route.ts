@@ -209,7 +209,13 @@ async function legacySnapshot(request: Request) {
     ]),
   );
   const leaderboard = await database`
-    WITH ranked AS (
+    WITH coin_totals AS (
+      SELECT participant_id,
+        COALESCE(sum(amount) FILTER (WHERE type='quiz_award'), 0)::int AS round1_coins,
+        COALESCE(-sum(amount) FILTER (WHERE type='help_purchase'), 0)::int AS round2_spent
+      FROM coin_transactions
+      GROUP BY participant_id
+    ), ranked AS (
       SELECT p.user_id, row_number() OVER (
         ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC,
           COALESCE(p.completion_time, 9999999999999) ASC, p.user_id ASC
@@ -219,6 +225,9 @@ async function legacySnapshot(request: Request) {
       WHERE eligible.disqualified=false
     )
     SELECT u.id, u.name, u.college, ranked.rank, p.coins,
+      COALESCE(coin_totals.round1_coins, 0) AS "round1Coins",
+      p.coins AS "round2Coins",
+      COALESCE(coin_totals.round2_spent, 0) AS "round2Spent",
       p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore",
       p.language, p.current_question AS "currentQuestion", p.solved,
       p.helps_used AS "helpsUsed", p.completion_time AS "completionTime",
@@ -230,6 +239,7 @@ async function legacySnapshot(request: Request) {
     FROM participants p
     JOIN users u ON u.id=p.user_id
     LEFT JOIN ranked ON ranked.user_id=p.user_id
+    LEFT JOIN coin_totals ON coin_totals.participant_id=p.user_id
     ORDER BY u.disqualified ASC, ranked.rank ASC NULLS LAST, u.id ASC`;
   const [{ questionCount }] = await database<
     { questionCount: number }[]
@@ -294,7 +304,13 @@ async function legacySnapshot(request: Request) {
 async function loadLeaderboard(database: ReturnType<typeof db>, trace: Trace) {
   return timed(trace, "snapshot.leaderboard", () =>
     database<Row[]>`
-      WITH ranked AS (
+      WITH coin_totals AS (
+        SELECT participant_id,
+          COALESCE(sum(amount) FILTER (WHERE type='quiz_award'), 0)::int AS round1_coins,
+          COALESCE(-sum(amount) FILTER (WHERE type='help_purchase'), 0)::int AS round2_spent
+        FROM coin_transactions
+        GROUP BY participant_id
+      ), ranked AS (
         SELECT p.user_id, row_number() OVER (
           ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC,
             COALESCE(p.completion_time, 9999999999999) ASC, p.user_id ASC
@@ -304,6 +320,9 @@ async function loadLeaderboard(database: ReturnType<typeof db>, trace: Trace) {
         WHERE eligible.disqualified=false
       )
       SELECT u.id, u.name, u.college, ranked.rank, p.coins,
+        COALESCE(coin_totals.round1_coins, 0) AS "round1Coins",
+        p.coins AS "round2Coins",
+        COALESCE(coin_totals.round2_spent, 0) AS "round2Spent",
         p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore",
         p.language, p.current_question AS "currentQuestion", p.solved,
         p.helps_used AS "helpsUsed", p.completion_time AS "completionTime",
@@ -315,6 +334,7 @@ async function loadLeaderboard(database: ReturnType<typeof db>, trace: Trace) {
       FROM participants p
       JOIN users u ON u.id=p.user_id
       LEFT JOIN ranked ON ranked.user_id=p.user_id
+      LEFT JOIN coin_totals ON coin_totals.participant_id=p.user_id
       ORDER BY u.disqualified ASC, ranked.rank ASC NULLS LAST, u.id ASC`,
   );
 }

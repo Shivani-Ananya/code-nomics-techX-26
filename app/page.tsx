@@ -303,9 +303,19 @@ function ExamSecurity({
       }
     };
     const visibilityChanged = () => {
-      if (document.visibilityState === "hidden") void reportViolation("tab-hidden");
+      if (document.visibilityState === "hidden") {
+        setNeedsFullscreen(true);
+        void reportViolation("tab-hidden");
+      }
     };
-    const focusLost = () => void reportViolation("window-focus-lost");
+    const focusLost = () => {
+      setNeedsFullscreen(true);
+      void reportViolation("window-focus-lost");
+    };
+    const pageHidden = () => {
+      setNeedsFullscreen(true);
+      void reportViolation("tab-hidden");
+    };
     const fullscreenChanged = () => {
       const fullscreen = Boolean(document.fullscreenElement);
       setNeedsFullscreen(!fullscreen);
@@ -321,7 +331,9 @@ function ExamSecurity({
     document.addEventListener("keydown", blockShortcuts, true);
     document.addEventListener("visibilitychange", visibilityChanged);
     document.addEventListener("fullscreenchange", fullscreenChanged);
+    document.addEventListener("freeze", pageHidden);
     window.addEventListener("blur", focusLost);
+    window.addEventListener("pagehide", pageHidden);
     return () => {
       document.body.classList.remove("exam-security-active");
       document.removeEventListener("copy", blockClipboard, true);
@@ -332,7 +344,9 @@ function ExamSecurity({
       document.removeEventListener("keydown", blockShortcuts, true);
       document.removeEventListener("visibilitychange", visibilityChanged);
       document.removeEventListener("fullscreenchange", fullscreenChanged);
+      document.removeEventListener("freeze", pageHidden);
       window.removeEventListener("blur", focusLost);
+      window.removeEventListener("pagehide", pageHidden);
     };
   }, [reportViolation]);
 
@@ -1476,7 +1490,7 @@ function TeamManager({
   };
   return (
     <>
-      <section className="management-card">
+      <section className="management-card" id="host-participants">
         <header>
           <div>
             <Pill>TEAM ACCESS</Pill>
@@ -1590,7 +1604,7 @@ function QuestionManager({
     }
   };
   return (
-    <section className="management-card question-manager">
+    <section className="management-card question-manager" id="host-questions">
       <header>
         <div>
           <Pill>QUESTION BANK</Pill>
@@ -1697,6 +1711,7 @@ function Host({
   >("all");
   const [scoreDelta, setScoreDelta] = useState("");
   const [scoreReason, setScoreReason] = useState("");
+  const [adminSection, setAdminSection] = useState("participants");
   const { ask, popup } = useConfirmDialog();
   const person =
     state.leaderboard.find((team) => team.id === selectedId) ||
@@ -1709,6 +1724,13 @@ function Host({
         ? team.disqualified
         : true,
   );
+  const openAdminSection = (section: string, targetId: string) => {
+    setAdminSection(section);
+    document.getElementById(targetId)?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  };
   const control = async (round: string, action: string, seconds?: number) => {
     const roundState = state.rounds[round];
     if (
@@ -1825,19 +1847,36 @@ function Host({
       <aside className="side">
         <Logo />
         <nav>
-          <button>
+          <button
+            className={adminSection === "overview" ? "active" : ""}
+            onClick={() => openAdminSection("overview", "host-overview")}
+          >
             <Activity /> Overview
           </button>
-          <button className="active">
+          <button
+            className={adminSection === "participants" ? "active" : ""}
+            onClick={() =>
+              openAdminSection("participants", "host-participants")
+            }
+          >
             <Users /> Participants
           </button>
-          <button>
+          <button
+            className={adminSection === "questions" ? "active" : ""}
+            onClick={() => openAdminSection("questions", "host-questions")}
+          >
             <Braces /> Questions
           </button>
-          <button>
+          <button
+            className={adminSection === "coin-ledger" ? "active" : ""}
+            onClick={() => openAdminSection("coin-ledger", "host-coin-ledger")}
+          >
             <Coins /> Coin ledger
           </button>
-          <button>
+          <button
+            className={adminSection === "leaderboard" ? "active" : ""}
+            onClick={() => openAdminSection("leaderboard", "host-leaderboard")}
+          >
             <Trophy /> Leaderboard
           </button>
         </nav>
@@ -1849,7 +1888,7 @@ function Host({
           <LogoutButton compact />
         </div>
       </aside>
-      <main>
+      <main id="host-overview">
         <header className="hosthead">
           <div>
             <Pill>HOST CONTROL</Pill>
@@ -1921,7 +1960,7 @@ function Host({
             PUBLISH RESULTS
           </button>
         </div>
-        <div className="stats">
+        <div className="stats" id="host-coin-ledger">
           <article>
             <small>TOTAL</small>
             <b>{state.leaderboard.length}</b>
@@ -1938,9 +1977,24 @@ function Host({
             <span>server total</span>
           </article>
           <article>
-            <small>COINS IN PLAY</small>
-            <b>{state.leaderboard.reduce((n, x) => n + x.coins, 0)}</b>
-            <span>verified balance</span>
+            <small>ROUND 1 COINS</small>
+            <b>
+              {state.leaderboard.reduce(
+                (n, x) => n + Number(x.round1Coins || 0),
+                0,
+              )}
+            </b>
+            <span>earned from quiz</span>
+          </article>
+          <article>
+            <small>ROUND 2 COINS</small>
+            <b>
+              {state.leaderboard.reduce(
+                (n, x) => n + Number(x.round2Coins || 0),
+                0,
+              )}
+            </b>
+            <span>after help purchases</span>
           </article>
           <article>
             <small>LOCKED</small>
@@ -1970,7 +2024,7 @@ function Host({
           />
         </div>
         <div className="hostgrid">
-          <section className="tablebox">
+          <section className="tablebox" id="host-leaderboard">
             <header>
               <div>
                 <h2>Live leaderboard</h2>
@@ -2003,7 +2057,8 @@ function Host({
                   <th>LANG.</th>
                   <th>PROGRESS</th>
                   <th>SCORE</th>
-                  <th>COINS</th>
+                  <th>R1 COINS</th>
+                  <th>R2 COINS</th>
                   <th>HELP</th>
                   <th>STATUS</th>
                 </tr>
@@ -2023,7 +2078,7 @@ function Host({
                       <small>{x.id}</small>
                     </td>
                     <td>
-                      <code>{x.language || "â€”"}</code>
+                      <code>{x.language || "—"}</code>
                     </td>
                     <td>
                       <progress
@@ -2033,7 +2088,8 @@ function Host({
                       {x.solved}/{state.questionCount || 0}
                     </td>
                     <td>{x.codingScore}</td>
-                    <td className="gold">{x.coins}</td>
+                    <td className="gold">{x.round1Coins || 0}</td>
+                    <td className="gold">{x.round2Coins || 0}</td>
                     <td>{x.helpsUsed}/3</td>
                     <td>
                       <Pill
@@ -2059,7 +2115,7 @@ function Host({
           </section>
           <aside className="detail">
             <header>
-              <b>{String(person.name || "â€”").slice(0, 2)}</b>
+              <b>{String(person.name || "—").slice(0, 2)}</b>
               <span>
                 <h3>{person.name}</h3>
                 <small>
@@ -2078,7 +2134,12 @@ function Host({
                 </b>
               </span>
               <span>
-                COINS<b className="gold">{person.coins}</b>
+                ROUND 1 COINS
+                <b className="gold">{person.round1Coins || 0}</b>
+              </span>
+              <span>
+                ROUND 2 COINS
+                <b className="gold">{person.round2Coins || 0}</b>
               </span>
               <span>
                 HELP USED<b>{person.helpsUsed}/3</b>
