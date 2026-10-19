@@ -211,21 +211,23 @@ async function legacySnapshot(request: Request) {
   const leaderboard = await database`
     WITH coin_totals AS (
       SELECT participant_id,
-        COALESCE(sum(amount) FILTER (WHERE type='quiz_award'), 0)::int AS round1_coins,
+        sum(amount) FILTER (WHERE type='quiz_award')::int AS round1_coins,
         COALESCE(-sum(amount) FILTER (WHERE type='help_purchase'), 0)::int AS round2_spent
       FROM coin_transactions
       GROUP BY participant_id
     ), ranked AS (
-      SELECT p.user_id, row_number() OVER (
-        ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC,
-          COALESCE(p.completion_time, 9999999999999) ASC, p.user_id ASC
+      SELECT p.user_id, rank() OVER (
+        ORDER BY
+          COALESCE(coin_totals.round1_coins, p.coins + COALESCE(coin_totals.round2_spent, 0)) DESC,
+          p.quiz_correct DESC
       )::int AS rank
       FROM participants p
       JOIN users eligible ON eligible.id=p.user_id
+      LEFT JOIN coin_totals ON coin_totals.participant_id=p.user_id
       WHERE eligible.disqualified=false
     )
     SELECT u.id, u.name, u.college, ranked.rank, p.coins,
-      COALESCE(coin_totals.round1_coins, 0) AS "round1Coins",
+      COALESCE(coin_totals.round1_coins, p.coins + COALESCE(coin_totals.round2_spent, 0)) AS "round1Coins",
       p.coins AS "round2Coins",
       COALESCE(coin_totals.round2_spent, 0) AS "round2Spent",
       p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore",
@@ -306,21 +308,23 @@ async function loadLeaderboard(database: ReturnType<typeof db>, trace: Trace) {
     database<Row[]>`
       WITH coin_totals AS (
         SELECT participant_id,
-          COALESCE(sum(amount) FILTER (WHERE type='quiz_award'), 0)::int AS round1_coins,
+          sum(amount) FILTER (WHERE type='quiz_award')::int AS round1_coins,
           COALESCE(-sum(amount) FILTER (WHERE type='help_purchase'), 0)::int AS round2_spent
         FROM coin_transactions
         GROUP BY participant_id
       ), ranked AS (
-        SELECT p.user_id, row_number() OVER (
-          ORDER BY p.solved DESC, p.coding_score DESC, p.helps_used ASC,
-            COALESCE(p.completion_time, 9999999999999) ASC, p.user_id ASC
+        SELECT p.user_id, rank() OVER (
+          ORDER BY
+            COALESCE(coin_totals.round1_coins, p.coins + COALESCE(coin_totals.round2_spent, 0)) DESC,
+            p.quiz_correct DESC
         )::int AS rank
         FROM participants p
         JOIN users eligible ON eligible.id=p.user_id
+        LEFT JOIN coin_totals ON coin_totals.participant_id=p.user_id
         WHERE eligible.disqualified=false
       )
       SELECT u.id, u.name, u.college, ranked.rank, p.coins,
-        COALESCE(coin_totals.round1_coins, 0) AS "round1Coins",
+        COALESCE(coin_totals.round1_coins, p.coins + COALESCE(coin_totals.round2_spent, 0)) AS "round1Coins",
         p.coins AS "round2Coins",
         COALESCE(coin_totals.round2_spent, 0) AS "round2Spent",
         p.quiz_correct AS "quizCorrect", p.coding_score AS "codingScore",
@@ -426,9 +430,16 @@ async function loadParticipantBundle(
         (
           SELECT ranked.position
           FROM (
-            SELECT user_id, row_number() OVER (
-              ORDER BY solved DESC, coding_score DESC, helps_used ASC,
-                COALESCE(completion_time, 9999999999999) ASC, user_id ASC
+            SELECT user_id, rank() OVER (
+              ORDER BY COALESCE(
+                (SELECT sum(earned.amount)::int FROM coin_transactions earned
+                 WHERE earned.participant_id=rank_participant.user_id AND earned.type='quiz_award'),
+                rank_participant.coins + COALESCE(
+                  (SELECT -sum(spent.amount)::int FROM coin_transactions spent
+                   WHERE spent.participant_id=rank_participant.user_id AND spent.type='help_purchase'),
+                  0
+                )
+              ) DESC, quiz_correct DESC
             )::int AS position
             FROM participants rank_participant
             JOIN users rank_user ON rank_user.id=rank_participant.user_id
@@ -555,9 +566,16 @@ async function loadParticipantLive(
         (
           SELECT ranked.position
           FROM (
-            SELECT user_id, row_number() OVER (
-              ORDER BY solved DESC, coding_score DESC, helps_used ASC,
-                COALESCE(completion_time, 9999999999999) ASC, user_id ASC
+            SELECT user_id, rank() OVER (
+              ORDER BY COALESCE(
+                (SELECT sum(earned.amount)::int FROM coin_transactions earned
+                 WHERE earned.participant_id=rank_participant.user_id AND earned.type='quiz_award'),
+                rank_participant.coins + COALESCE(
+                  (SELECT -sum(spent.amount)::int FROM coin_transactions spent
+                   WHERE spent.participant_id=rank_participant.user_id AND spent.type='help_purchase'),
+                  0
+                )
+              ) DESC, quiz_correct DESC
             )::int AS position
             FROM participants rank_participant
             JOIN users rank_user ON rank_user.id=rank_participant.user_id
@@ -615,9 +633,16 @@ async function loadParticipantLive(
         (
           SELECT ranked.position
           FROM (
-            SELECT user_id, row_number() OVER (
-              ORDER BY solved DESC, coding_score DESC, helps_used ASC,
-                COALESCE(completion_time, 9999999999999) ASC, user_id ASC
+            SELECT user_id, rank() OVER (
+              ORDER BY COALESCE(
+                (SELECT sum(earned.amount)::int FROM coin_transactions earned
+                 WHERE earned.participant_id=rank_participant.user_id AND earned.type='quiz_award'),
+                rank_participant.coins + COALESCE(
+                  (SELECT -sum(spent.amount)::int FROM coin_transactions spent
+                   WHERE spent.participant_id=rank_participant.user_id AND spent.type='help_purchase'),
+                  0
+                )
+              ) DESC, quiz_correct DESC
             )::int AS position
             FROM participants rank_participant
             JOIN users rank_user ON rank_user.id=rank_participant.user_id

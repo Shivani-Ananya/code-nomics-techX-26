@@ -2056,7 +2056,8 @@ function Host({
                   <th>PARTICIPANT</th>
                   <th>LANG.</th>
                   <th>PROGRESS</th>
-                  <th>SCORE</th>
+                  <th>CORRECT</th>
+                  <th>CODE SCORE</th>
                   <th>R1 COINS</th>
                   <th>R2 COINS</th>
                   <th>HELP</th>
@@ -2087,6 +2088,7 @@ function Host({
                       />{" "}
                       {x.solved}/{state.questionCount || 0}
                     </td>
+                    <td>{x.quizCorrect}/40</td>
                     <td>{x.codingScore}</td>
                     <td className="gold">{x.round1Coins || 0}</td>
                     <td className="gold">{x.round2Coins || 0}</td>
