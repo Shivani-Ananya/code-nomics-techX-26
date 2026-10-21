@@ -720,7 +720,11 @@ async function snapshot(
   liveOnly = false,
   sharedOnly = false,
 ) {
-  if (process.env.SNAPSHOT_LEGACY === "true") return legacySnapshot(request);
+  // Event-day safety fallback: the optimized participant bundle can be
+  // re-enabled after the event. The stable query path supports the current
+  // attendance and prevents authenticated participant logins from failing.
+  return legacySnapshot(request);
+  /* c8 ignore start */
   const trace = createTrace(liveOnly ? "live-snapshot" : "snapshot");
   let status = 200;
   try {
@@ -808,6 +812,7 @@ async function snapshot(
   } finally {
     finishTrace(trace, status);
   }
+  /* c8 ignore stop */
 }
 
 async function requireRole(request: Request, role?: "host" | "participant") {
