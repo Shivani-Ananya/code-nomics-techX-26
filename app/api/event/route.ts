@@ -752,6 +752,10 @@ async function snapshot(
       });
     }
 
+    await timed(trace, "snapshot.release-stale-jobs", () =>
+      releaseStaleJudgeJobs(database, session.id),
+    );
+
     // Frequent participant timer/event polls only need public round state. The
     // signed HttpOnly session still authenticates this response, but avoiding a
     // participant query here keeps 200 idle browsers from continuously reading
@@ -826,6 +830,19 @@ async function requireRole(request: Request, role?: "host" | "participant") {
     userRoleCache.set(session.id, { expiresAt: now + 30_000, role: userRole, locked, disqualified });
   }
   return userRole === session.role && !locked && !disqualified ? session : null;
+}
+
+async function releaseStaleJudgeJobs(
+  database: ReturnType<typeof db>,
+  participantId: string,
+) {
+  await database`UPDATE submission_jobs
+    SET status='failed', locked_at=NULL, locked_by=NULL,
+        last_error='Judge worker unavailable. Your source is saved; please retry when the worker is online.',
+        updated_at=now()
+    WHERE participant_id=${participantId}
+      AND status IN ('queued','running')
+      AND updated_at < now() - interval '45 seconds'`;
 }
 async function login(request: Request, body: Body) {
   await ensureSeeded();
@@ -1460,6 +1477,7 @@ async function runSample(request: Request, body: Body) {
   if (!Number.isInteger(questionId))
     return json({ error: "Invalid question" }, 400);
   const database = db();
+  await releaseStaleJudgeJobs(database, session.id);
   let submissionId: unknown;
   await database.begin(async (tx) => {
     const [p] =
@@ -1516,6 +1534,7 @@ async function submitCode(request: Request, body: Body) {
   if (!Number.isInteger(questionId))
     return json({ error: "Invalid coding question" }, 400);
   const database = db();
+  await releaseStaleJudgeJobs(database, session.id);
   let submissionId: unknown;
   await database.begin(async (tx) => {
     const [p] =
