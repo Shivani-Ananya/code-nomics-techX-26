@@ -880,15 +880,13 @@ async function login(request: Request, body: Body) {
   await database`DELETE FROM login_rate_limits WHERE client_key=${key}`;
   if (role === "participant") {
     const now = Date.now();
-    await database`INSERT INTO participants (user_id, last_seen, quiz_submitted_at)
-      SELECT ${user.id}, ${now}, CASE WHEN EXISTS (
-        SELECT 1 FROM rounds WHERE id='round2' AND status='active'
-      ) THEN ${now} ELSE NULL END
-      ON CONFLICT (user_id) DO UPDATE SET
-        last_seen=excluded.last_seen,
-        quiz_submitted_at=CASE WHEN EXISTS (
-          SELECT 1 FROM rounds WHERE id='round2' AND status='active'
-        ) THEN COALESCE(participants.quiz_submitted_at, ${now}) ELSE participants.quiz_submitted_at END`;
+    await database`INSERT INTO participants (user_id, last_seen)
+      VALUES (${user.id}, ${now})
+      ON CONFLICT (user_id) DO UPDATE SET last_seen=excluded.last_seen`;
+    await database`UPDATE participants
+      SET quiz_submitted_at=COALESCE(quiz_submitted_at, ${now})
+      WHERE user_id=${user.id}
+        AND EXISTS (SELECT 1 FROM rounds WHERE id='round2' AND status='active')`;
   }
   const token = await createSession(String(user.id), role);
   const headers = new Headers(request.headers);
