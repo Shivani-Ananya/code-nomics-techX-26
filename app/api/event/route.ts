@@ -216,18 +216,19 @@ async function legacySnapshot(request: Request) {
       FROM coin_transactions
       GROUP BY participant_id
     ), ranked AS (
-      SELECT p.user_id, rank() OVER (
+      SELECT p.user_id, row_number() OVER (
         ORDER BY
-          p.coding_score DESC,
           p.solved DESC,
+          p.coding_score DESC,
+          COALESCE(p.coding_submitted_at, p.completion_time) ASC NULLS LAST,
           p.quiz_correct DESC,
-          COALESCE(p.coding_submitted_at, p.completion_time) ASC
+          p.user_id ASC
       )::int AS rank
       FROM participants p
       JOIN users eligible ON eligible.id=p.user_id
       LEFT JOIN coin_totals ON coin_totals.participant_id=p.user_id
       WHERE eligible.disqualified=false
-        AND COALESCE(p.coding_submitted_at, p.completion_time) IS NOT NULL
+        AND p.solved > 0
     )
     SELECT u.id, u.name, u.college, ranked.rank, p.coins,
       COALESCE(coin_totals.round1_coins, p.coins + COALESCE(coin_totals.round2_spent, 0)) AS "round1Coins",
@@ -316,18 +317,19 @@ async function loadLeaderboard(database: ReturnType<typeof db>, trace: Trace) {
         FROM coin_transactions
         GROUP BY participant_id
       ), ranked AS (
-        SELECT p.user_id, rank() OVER (
+        SELECT p.user_id, row_number() OVER (
           ORDER BY
-            p.coding_score DESC,
             p.solved DESC,
+            p.coding_score DESC,
+            COALESCE(p.coding_submitted_at, p.completion_time) ASC NULLS LAST,
             p.quiz_correct DESC,
-            COALESCE(p.coding_submitted_at, p.completion_time) ASC
+            p.user_id ASC
         )::int AS rank
         FROM participants p
         JOIN users eligible ON eligible.id=p.user_id
         LEFT JOIN coin_totals ON coin_totals.participant_id=p.user_id
         WHERE eligible.disqualified=false
-          AND COALESCE(p.coding_submitted_at, p.completion_time) IS NOT NULL
+          AND p.solved > 0
       )
       SELECT u.id, u.name, u.college, ranked.rank, p.coins,
         COALESCE(coin_totals.round1_coins, p.coins + COALESCE(coin_totals.round2_spent, 0)) AS "round1Coins",
@@ -436,16 +438,17 @@ async function loadParticipantBundle(
         (
           SELECT ranked.position
           FROM (
-            SELECT user_id, rank() OVER (
-              ORDER BY rank_participant.coding_score DESC,
-                rank_participant.solved DESC,
+            SELECT user_id, row_number() OVER (
+              ORDER BY rank_participant.solved DESC,
+                rank_participant.coding_score DESC,
+                COALESCE(rank_participant.coding_submitted_at, rank_participant.completion_time) ASC NULLS LAST,
                 rank_participant.quiz_correct DESC,
-                COALESCE(rank_participant.coding_submitted_at, rank_participant.completion_time) ASC
+                rank_participant.user_id ASC
             )::int AS position
             FROM participants rank_participant
             JOIN users rank_user ON rank_user.id=rank_participant.user_id
             WHERE rank_user.disqualified=false
-              AND COALESCE(rank_participant.coding_submitted_at, rank_participant.completion_time) IS NOT NULL
+              AND rank_participant.solved > 0
           ) ranked
           WHERE ranked.user_id=${participantId}
         ) AS "participantRank",
@@ -568,16 +571,17 @@ async function loadParticipantLive(
         (
           SELECT ranked.position
           FROM (
-            SELECT user_id, rank() OVER (
-              ORDER BY rank_participant.coding_score DESC,
-                rank_participant.solved DESC,
+            SELECT user_id, row_number() OVER (
+              ORDER BY rank_participant.solved DESC,
+                rank_participant.coding_score DESC,
+                COALESCE(rank_participant.coding_submitted_at, rank_participant.completion_time) ASC NULLS LAST,
                 rank_participant.quiz_correct DESC,
-                COALESCE(rank_participant.coding_submitted_at, rank_participant.completion_time) ASC
+                rank_participant.user_id ASC
             )::int AS position
             FROM participants rank_participant
             JOIN users rank_user ON rank_user.id=rank_participant.user_id
             WHERE rank_user.disqualified=false
-              AND COALESCE(rank_participant.coding_submitted_at, rank_participant.completion_time) IS NOT NULL
+              AND rank_participant.solved > 0
           ) ranked
           WHERE ranked.user_id=${participantId}
         ) AS "participantRank"
@@ -631,16 +635,17 @@ async function loadParticipantLive(
         (
           SELECT ranked.position
           FROM (
-            SELECT user_id, rank() OVER (
-              ORDER BY rank_participant.coding_score DESC,
-                rank_participant.solved DESC,
+            SELECT user_id, row_number() OVER (
+              ORDER BY rank_participant.solved DESC,
+                rank_participant.coding_score DESC,
+                COALESCE(rank_participant.coding_submitted_at, rank_participant.completion_time) ASC NULLS LAST,
                 rank_participant.quiz_correct DESC,
-                COALESCE(rank_participant.coding_submitted_at, rank_participant.completion_time) ASC
+                rank_participant.user_id ASC
             )::int AS position
             FROM participants rank_participant
             JOIN users rank_user ON rank_user.id=rank_participant.user_id
             WHERE rank_user.disqualified=false
-              AND COALESCE(rank_participant.coding_submitted_at, rank_participant.completion_time) IS NOT NULL
+              AND rank_participant.solved > 0
           ) ranked
           WHERE ranked.user_id=${participantId}
         ) AS "participantRank",
