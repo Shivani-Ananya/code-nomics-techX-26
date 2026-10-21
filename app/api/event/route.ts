@@ -841,9 +841,8 @@ async function login(request: Request, body: Body) {
   const normalizedLogin = role === "host" ? loginName.toUpperCase() : loginName;
   const key = await loginClientKey(request, normalizedLogin);
   const database = db();
-  const [limit] = role === "host"
-    ? await database`SELECT blocked_until FROM login_rate_limits WHERE client_key=${key}`
-    : [];
+  const [limit] =
+    await database`SELECT blocked_until FROM login_rate_limits WHERE client_key=${key}`;
   const blockedUntil = Number(limit?.blocked_until || 0);
   if (blockedUntil > Date.now())
     return json(
@@ -854,24 +853,17 @@ async function login(request: Request, body: Body) {
     );
   if (limit?.blocked_until)
     await database`DELETE FROM login_rate_limits WHERE client_key=${key}`;
-  if (role === "participant")
-    await database`DELETE FROM login_rate_limits WHERE client_key=${key}`;
   const [user] =
     role === "host"
-      ? await database`SELECT id, role, name, password_hash, password_salt, locked, disqualified FROM users WHERE id=${normalizedLogin} AND role='host'`
-      : await database`SELECT id, role, name, password_hash, password_salt, locked, disqualified FROM users WHERE lower(name)=lower(${loginName}) AND role='participant'`;
+      ? await database`SELECT id, role, password_hash, password_salt, locked, disqualified FROM users WHERE id=${normalizedLogin} AND role='host'`
+      : await database`SELECT id, role, password_hash, password_salt, locked, disqualified FROM users WHERE name=${loginName} AND role='participant'`;
   const password = String(body.password || "");
   const expectedHash = user
     ? await hashPassword(password, String(user.password_salt))
     : "";
-  const teamNamePassword =
-    role === "participant" &&
-    user &&
-    password.trim().toLocaleLowerCase() === String(user.name).trim().toLocaleLowerCase();
-  const valid =
-    user && (safeEqual(expectedHash, String(user.password_hash)) || teamNamePassword);
+  const valid = user && safeEqual(expectedHash, String(user.password_hash));
   if (!valid || !user || user.locked || user.disqualified) {
-    if (user && role === "host") await recordLoginFailure(key);
+    if (user) await recordLoginFailure(key);
     return json({ error: "Invalid credentials or account unavailable" }, 401);
   }
   // A valid login starts a fresh rate-limit window. Without this cleanup,
@@ -879,14 +871,7 @@ async function login(request: Request, body: Body) {
   // successful sign-in and can cause an unexpected later lockout.
   await database`DELETE FROM login_rate_limits WHERE client_key=${key}`;
   if (role === "participant") {
-    const now = Date.now();
-    await database`INSERT INTO participants (user_id, last_seen)
-      VALUES (${user.id}, ${now})
-      ON CONFLICT (user_id) DO UPDATE SET last_seen=excluded.last_seen`;
-    await database`UPDATE participants
-      SET quiz_submitted_at=COALESCE(quiz_submitted_at, ${now})
-      WHERE user_id=${user.id}
-        AND EXISTS (SELECT 1 FROM rounds WHERE id='round2' AND status='active')`;
+    await database`INSERT INTO participants (user_id, last_seen) VALUES (${user.id}, ${Date.now()}) ON CONFLICT DO NOTHING`;
   }
   const token = await createSession(String(user.id), role);
   const headers = new Headers(request.headers);
