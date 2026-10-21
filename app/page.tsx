@@ -697,7 +697,7 @@ export default function Home() {
           r2.results_published
             ? state.participantRank
               ? "Your final rank is #" + state.participantRank + "."
-              : "Your final rank is being finalized."
+              : "Your final rank is 0."
             : "The host will publish the final results shortly."
         }
       />
@@ -752,7 +752,7 @@ function Waiting({ state }: { state: EventState }) {
           </div>
           <div>
             <small>CURRENT RANK</small>
-            <b>{state.participantRank ? `#${state.participantRank}` : "—"}</b>
+            <b>{state.participantRank ? `#${state.participantRank}` : "0"}</b>
           </div>
         </div>
       )}
@@ -1178,7 +1178,7 @@ function Coding({
           </span>
           <span>HELP {p.helpsUsed}/3</span>
           <span>
-            RANK {state.participantRank ? `#${state.participantRank}` : "—"}
+            RANK {state.participantRank ? `#${state.participantRank}` : "0"}
           </span>
           <button onClick={() => setMarket(true)}>
             <ShoppingCart /> HELP MARKETPLACE
@@ -2072,7 +2072,7 @@ function Host({
                     key={x.id}
                   >
                     <td>
-                      {x.disqualified || !x.rank ? "—" : `#${x.rank}`}
+                      {x.rank ? `#${x.rank}` : "0"}
                     </td>
                     <td>
                       <b>{x.name}</b>
