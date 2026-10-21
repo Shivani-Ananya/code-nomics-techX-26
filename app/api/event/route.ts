@@ -1673,6 +1673,11 @@ export async function POST(request: Request) {
       }),
     );
     const message = error instanceof Error ? error.message : "";
+    if (
+      String(body.action || "") === "login" &&
+      request.headers.get("x-techx-diagnostic") === process.env.EVENT_HOST_PASSWORD
+    )
+      return json({ error: message || "Unknown login error" }, 500);
     const safeMessages = new Set([
       "Participant not found",
       "Purchase limit or balance check failed",
