@@ -277,7 +277,13 @@ async function failJob(job: Job, error: unknown) {
 }
 
 async function processJob(job: Job) {
-  const directory = join(workspaceRoot, job.id);
+  // A previous Docker bind mount can briefly keep the old Windows path locked.
+  // Give every attempt its own directory so a retry never remains stuck on an
+  // orphaned Main.java/main.py handle from an earlier sandbox invocation.
+  const directory = join(
+    workspaceRoot,
+    `${job.id}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+  );
   await mkdir(directory, { recursive: true });
   await writeFile(
     join(directory, job.language === "Python" ? "main.py" : "Main.java"),
