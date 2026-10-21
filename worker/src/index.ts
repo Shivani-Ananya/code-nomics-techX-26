@@ -78,6 +78,19 @@ const normalize = (value: string) =>
     .trimEnd();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function isSandboxInfrastructureFailure(result: {
+  code: number;
+  stderr: string;
+  timedOut: boolean;
+}) {
+  return (
+    (!result.timedOut && [125, 126, 127, -1].includes(result.code)) ||
+    /error response from daemon|not a valid windows path|cannot connect to the docker daemon/i.test(
+      result.stderr,
+    )
+  );
+}
+
 async function claim(): Promise<Job | null> {
   const rows = await sql<Job[]>`
     WITH candidate AS (
@@ -306,7 +319,7 @@ async function processJob(job: Job) {
         },
         directory,
       );
-      if ([125, 126, 127, -1].includes(result.code) && !result.timedOut)
+      if (isSandboxInfrastructureFailure(result))
         throw new Error(
           `Sandbox unavailable: ${result.stderr || `exit ${result.code}`}`,
         );
@@ -326,12 +339,7 @@ async function processJob(job: Job) {
     for (const [index, test] of tests.entries()) {
       const result = await execute(job, test, directory);
       if (result.timedOut) continue;
-      if (
-        result.code === 125 ||
-        result.code === 126 ||
-        result.code === 127 ||
-        result.code === -1
-      )
+      if (isSandboxInfrastructureFailure(result))
         throw new Error(
           `Sandbox unavailable: ${result.stderr || `exit ${result.code}`}`,
         );
