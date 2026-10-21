@@ -367,7 +367,7 @@ function ExamSecurity({
             <h2>{notice ? "Security violation detected" : "Fullscreen is required"}</h2>
             <p>
               {notice
-                ? `Reason: ${notice.reason.replaceAll("-", " ")}. ${notice.warningsRemaining} warning${notice.warningsRemaining === 1 ? "" : "s"} remain before automatic disqualification.`
+                ? `Reason: ${notice.reason.replaceAll("-", " ")}. This incident was recorded; your event access remains active.`
                 : "Enter fullscreen to begin. Leaving this tab, losing window focus, exiting fullscreen, clipboard actions, right-click, and blocked browser shortcuts are recorded."}
             </p>
             <footer>

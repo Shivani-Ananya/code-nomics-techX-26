@@ -871,7 +871,16 @@ async function login(request: Request, body: Body) {
   // successful sign-in and can cause an unexpected later lockout.
   await database`DELETE FROM login_rate_limits WHERE client_key=${key}`;
   if (role === "participant") {
-    await database`INSERT INTO participants (user_id, last_seen) VALUES (${user.id}, ${Date.now()}) ON CONFLICT DO NOTHING`;
+    const now = Date.now();
+    await database`INSERT INTO participants (user_id, last_seen, quiz_submitted_at)
+      SELECT ${user.id}, ${now}, CASE WHEN EXISTS (
+        SELECT 1 FROM rounds WHERE id='round2' AND status='active'
+      ) THEN ${now} ELSE NULL END
+      ON CONFLICT (user_id) DO UPDATE SET
+        last_seen=excluded.last_seen,
+        quiz_submitted_at=CASE WHEN EXISTS (
+          SELECT 1 FROM rounds WHERE id='round2' AND status='active'
+        ) THEN COALESCE(participants.quiz_submitted_at, ${now}) ELSE participants.quiz_submitted_at END`;
   }
   const token = await createSession(String(user.id), role);
   const headers = new Headers(request.headers);
@@ -918,9 +927,16 @@ async function hostAction(request: Request, body: Body) {
       // participant router continues to show the Round 1 waiting screen while
       // Round 2 is already active.
       if (id === "round2") {
+        await tx`UPDATE users
+          SET locked=false, disqualified=false
+          WHERE role='participant'`;
         await tx`UPDATE participants
-          SET quiz_submitted_at=COALESCE(quiz_submitted_at, ${now}), last_seen=${now}
-          WHERE quiz_submitted_at IS NULL AND status NOT IN ('locked', 'disqualified')`;
+          SET quiz_submitted_at=COALESCE(quiz_submitted_at, ${now}),
+              status='waiting', last_seen=${now}, security_violation_count=0,
+              security_last_violation_at=NULL, security_last_violation_reason=NULL,
+              security_disqualified_at=NULL`;
+        await tx`DELETE FROM exam_violations`;
+        userRoleCache.clear();
       }
       await tx`UPDATE rounds SET status='ended', paused_at=NULL, updated_at=${now} WHERE id<>${id} AND status IN ('active','paused')`;
       await tx`UPDATE rounds SET status='active', started_at=${now}, paused_at=NULL, accumulated_pause_seconds=0, results_published=false, updated_at=${now} WHERE id=${id}`;
@@ -1068,12 +1084,12 @@ async function recordSecurityViolation(request: Request, body: Body) {
       return;
     }
 
-    const nextCount = Math.min(3, currentCount + 1);
-    const disqualified = nextCount >= 3;
+    const nextCount = currentCount + 1;
+    // Violations remain auditable and visible to the host, but event-day
+    // policy keeps every team active instead of auto-disqualifying it.
+    const disqualified = false;
     await tx`INSERT INTO exam_violations (client_event_id, participant_id, round_id, reason, occurred_at) VALUES (${clientEventId}, ${session.id}, ${roundId}, ${reason}, ${now})`;
     await tx`UPDATE participants SET security_violation_count=${nextCount}, security_last_violation_at=${now}, security_last_violation_reason=${reason}, security_disqualified_at=${disqualified ? now : null}, status=${disqualified ? "disqualified" : "online"} WHERE user_id=${session.id}`;
-    if (disqualified)
-      await tx`UPDATE users SET disqualified=true, locked=true WHERE id=${session.id}`;
     notice = {
       violationCount: nextCount,
       warningsRemaining: Math.max(0, 3 - nextCount),
@@ -1129,7 +1145,10 @@ async function addTeams(request: Request, body: Body) {
       const hash = await hashPassword(name, salt);
       const now = Date.now();
       await tx`INSERT INTO users (id, role, name, college, password_hash, password_salt, created_at) VALUES (${id}, 'participant', ${name}, 'Team', ${hash}, ${salt}, ${now})`;
-      await tx`INSERT INTO participants (user_id, last_seen) VALUES (${id}, ${now})`;
+      await tx`INSERT INTO participants (user_id, last_seen, quiz_submitted_at)
+        SELECT ${id}, ${now}, CASE WHEN EXISTS (
+          SELECT 1 FROM rounds WHERE id='round2' AND status='active'
+        ) THEN ${now} ELSE NULL END`;
       created.push({ id, name, password: name });
       existingNames.add(name.toLocaleLowerCase());
       usedIds.add(candidate++);
