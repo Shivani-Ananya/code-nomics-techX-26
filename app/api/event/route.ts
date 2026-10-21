@@ -912,6 +912,16 @@ async function hostAction(request: Request, body: Body) {
         await tx`UPDATE participants SET quiz_submitted_at=NULL, quiz_correct=0, coins=0, coding_score=0, language=NULL, current_question=1, solved=0, helps_used=0, completion_time=NULL, coding_submitted_at=NULL, status='waiting', last_seen=${now}`;
         await tx`UPDATE rounds SET status='waiting', started_at=NULL, paused_at=NULL, accumulated_pause_seconds=0, results_published=false, updated_at=${now}`;
       }
+      // Starting the coding round must release every eligible team even when
+      // its quiz submission request was missed (for example after a network
+      // interruption at the Round 1 deadline). Without this finalization the
+      // participant router continues to show the Round 1 waiting screen while
+      // Round 2 is already active.
+      if (id === "round2") {
+        await tx`UPDATE participants
+          SET quiz_submitted_at=COALESCE(quiz_submitted_at, ${now}), last_seen=${now}
+          WHERE quiz_submitted_at IS NULL AND status NOT IN ('locked', 'disqualified')`;
+      }
       await tx`UPDATE rounds SET status='ended', paused_at=NULL, updated_at=${now} WHERE id<>${id} AND status IN ('active','paused')`;
       await tx`UPDATE rounds SET status='active', started_at=${now}, paused_at=NULL, accumulated_pause_seconds=0, results_published=false, updated_at=${now} WHERE id=${id}`;
     });
